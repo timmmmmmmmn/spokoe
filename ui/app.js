@@ -20,6 +20,7 @@ const store = {
   set(k, v) { try { localStorage.setItem('spotimfy:' + k, JSON.stringify(v)); } catch {} },
 };
 const idOf = uri => String(uri || '').split(':').pop();
+const isMobile = () => document.documentElement.classList.contains('mobile');
 const icon = (id, cls = '') => `<svg class="${cls}"><use href="#i-${id}"/></svg>`;
 
 // ——— toestand ———
@@ -55,7 +56,10 @@ window.spotimfy = {
         m.error ? w.reject(new Error(m.error)) : w.resolve(m);
         return;
       }
-      case 'config': S.clientId = m.clientId || ''; S.redirect = m.redirect; return;
+      case 'config':
+        S.clientId = m.clientId || ''; S.redirect = m.redirect; S.deviceName = m.deviceName || 'Spotimfy op deze Mac';
+        if (m.platform === 'android' && !S.androidInit) { S.androidInit = true; post('volume', { v: 1 }); }
+        return;
       case 'status': return onStatus(m);
       case 'track': S.asked = null; return onTrack({ uri: m.uri, name: m.name, artists: m.artists || [], album: { name: m.album, images: m.cover ? [{ url: m.cover }] : [] }, duration: m.duration, explicit: m.explicit }, true);
       case 'play':
@@ -96,7 +100,7 @@ function onStatus(m) {
     login.hidden = false;
     $('#login-btn').disabled = false;
     $('#login-btn').textContent = 'Inloggen met Spotify';
-    $('#login-msg').textContent = m.message ? `Dat lukte niet (${m.message}). Probeer het nog eens.` : 'Log in met je Spotify Premium-account. Je browser opent even; daarna speelt alles hier op je Mac.';
+    $('#login-msg').textContent = m.message ? `Dat lukte niet (${m.message}). Probeer het nog eens.` : 'Log in met je Spotify Premium-account. Je browser opent even; daarna speelt alles hier.';
   } else if (m.state === 'connecting') {
     if (!S.ready) {
       login.hidden = false;
@@ -372,9 +376,12 @@ function onTrack(t, local) {
 // ——— spelerbalk ———
 function renderTrack() {
   const t = S.track;
-  $('#np-cover').src = t ? pic(t.album.images, 128) : '';
-  $('#np-disc').style.setProperty('--cover', t ? `url('${pic(t.album.images, 128)}')` : 'none');
-  if (!t) $('#np-cover').removeAttribute('src');
+  const small = t ? pic(t.album.images, 128) : '';
+  // Geen hoes: geen kapot plaatje, maar een nette vervanger.
+  if (small) $('#np-cover').src = small; else $('#np-cover').removeAttribute('src');
+  $('#np').classList.toggle('no-cover', !small);
+  document.body.classList.toggle('has-track', !!t);
+  $('#np-disc').style.setProperty('--cover', small ? `url('${small}')` : 'none');
   $('#np-title').textContent = t?.name || '';
   $('#np-title').dataset.go = t?.album?.id ? 'album:' + t.album.id : '';
   $('#np-artist').innerHTML = t ? t.artists.map(a => a.id ? `<a data-go="artist:${esc(a.id)}">${esc(a.name)}</a>` : esc(a.name)).join(', ') + (S.remote && !S.local && S.device ? ` · <span style="color:var(--accent)">${esc(S.device)}</span>` : '') : '';
@@ -398,6 +405,8 @@ function renderPlay() {
   document.body.classList.toggle('is-playing', !!S.playing);
   b.title = S.playing ? 'Pauzeer (spatie)' : 'Speel af (spatie)';
   $('#lf-play').innerHTML = icon(S.playing ? 'pause' : 'play');
+  $('#lf-shuffle').classList.toggle('on', S.shuffle);
+  $('#lf-repeat').classList.toggle('on', S.repeat > 0);
   $('#lf-play').classList.toggle('paused', !S.playing);
   $('#bar').classList.toggle('remote', !!S.remote && !S.local);
   const bp = $('.big-play[data-ctx]');
@@ -418,6 +427,8 @@ function renderVolume() {
 }
 function renderLike() {
   const on = S.track && S.liked.get(S.track.uri);
+  $('#lf-like').classList.toggle('on', !!on);
+  $('#lf-like').innerHTML = icon(on ? 'heart-on' : 'heart');
   const b = $('#np-like');
   b.classList.toggle('on', !!on);
   b.innerHTML = icon(on ? 'heart-on' : 'heart');
@@ -461,6 +472,29 @@ $('#b-queue').onclick = () => togglePanel('queue');
 $('#b-devices').onclick = e => devicesMenu(e.currentTarget);
 $('#b-sleep').onclick = e => sleepMenu(e.currentTarget);
 $('#np-cover').onclick = () => document.body.classList.contains('mini') ? toggleMini() : openLyricsFull();
+$('#bar').addEventListener('click', e => { if (isMobile() && !e.target.closest('button, a, .range')) openLyricsFull(); });
+$('#lf-shuffle').onclick = () => ctl('shuffle', !S.shuffle);
+$('#lf-repeat').onclick = () => ctl('repeat', (S.repeat + 1) % 3);
+$('#lf-like').onclick = () => S.track && toggleLike(S.track);
+$('#lf-lyr').onclick = () => { $('#lyrics-full').classList.toggle('show-lyrics'); if (!lyr && S.track) lyricsFor(S.track); };
+$('#lf-queue').onclick = () => { $('#lyrics-full').hidden = true; togglePanel('queue'); };
+$('#lf-dev').onclick = e => devicesMenu(e.currentTarget);
+$('#lf-sleep').onclick = e => sleepMenu(e.currentTarget);
+// Nu speelt: omlaag vegen om te sluiten.
+(() => {
+  let y0 = null;
+  const lf = $('#lyrics-full');
+  lf.addEventListener('touchstart', e => { if (!e.target.closest('.lf-lines, .range')) y0 = e.touches[0].clientY; }, { passive: true });
+  lf.addEventListener('touchmove', e => { if (y0 != null) { const dy = Math.max(0, e.touches[0].clientY - y0); lf.style.transform = `translateY(${dy}px)`; } }, { passive: true });
+  lf.addEventListener('touchend', e => {
+    if (y0 == null) return;
+    const dy = e.changedTouches[0].clientY - y0;
+    y0 = null;
+    lf.style.transition = 'transform .25s';
+    lf.style.transform = dy > 120 ? 'translateY(100%)' : '';
+    setTimeout(() => { if (dy > 120) lf.hidden = true; lf.style.transform = ''; lf.style.transition = ''; }, 250);
+  });
+})();
 $('#b-mini').onclick = () => toggleMini();
 $('#b-big').onclick = () => toggleMini();
 function toggleMini() {
@@ -559,7 +593,7 @@ async function pollRemote(now) {
     try {
       const p = await api('/me/player');
       if (p?.device && !S.local) {
-        const mine = p.device.name === 'Spotimfy op deze Mac';
+        const mine = p.device.name === S.deviceName;
         if (!mine) {
           S.remote = p; S.device = p.device.name;
           S.playing = p.is_playing; S.pos = p.progress_ms || 0; S.at = Date.now();
@@ -579,8 +613,8 @@ async function devicesMenu(anchor) {
   try { list = (await api('/me/player/devices'))?.devices || []; } catch (e) { return toast(e.message); }
   const items = [{ label: 'Speel af op', header: true }];
   for (const d of list) {
-    items.push({ label: d.name === 'Spotimfy op deze Mac' ? 'Deze Mac' : d.name, check: d.is_active, fn: async () => {
-      if (d.name === 'Spotimfy op deze Mac') { if (S.track) play({ tracks: [S.track.uri], position: Math.round(position()) }); return; }
+    items.push({ label: d.name === S.deviceName ? (isMobile() ? 'Deze telefoon' : 'Deze Mac') : d.name, check: d.is_active, fn: async () => {
+      if (d.name === S.deviceName) { if (S.track) play({ tracks: [S.track.uri], position: Math.round(position()) }); return; }
       try { await api('/me/player', { method: 'PUT', body: { device_ids: [d.id], play: true } }); S.local = false; setTimeout(() => pollRemote(true), 600); } catch (e) { toast(e.message); }
     } });
   }
@@ -642,7 +676,7 @@ async function show(entry) {
   view.innerHTML = '';
   view.scrollTop = 0;
   $('#top-title').textContent = '';
-  $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.go === entry.where));
+  $$('#nav button, #mnav [data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === entry.where));
   $$('#side-lists button').forEach(b => b.classList.toggle('on', b.dataset.go === `${entry.where}:${entry.arg}`));
   $('#back').disabled = !hist.length;
   $('#fwd').disabled = !ahead.length;
@@ -686,7 +720,7 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
     <div class="al">${t.album.id ? `<a data-go="album:${esc(t.album.id)}">${esc(t.album.name)}</a>` : esc(t.album.name)}</div>
     ${added() ? `<div class="ad">${t.added ? day(t.added) : ''}</div>` : ''}
     <button class="icon like${S.liked.get(t.uri) ? ' on' : ''}" data-like>${icon(S.liked.get(t.uri) ? 'heart-on' : 'heart')}</button>
-    <div class="d">${fmt(t.duration)}</div></div>`;
+    <div class="d">${fmt(t.duration)}</div><button class="icon more-btn" data-more>${icon('more')}</button></div>`;
   // Alleen de rijen die je ziet bestaan echt: ook 10.000 nummers blijven soepel.
   L.render = () => {
     el.classList.toggle('with-added', added());
@@ -827,6 +861,7 @@ $('#view').addEventListener('click', e => {
   const like = e.target.closest('[data-like]');
   const row = e.target.closest('.tr[data-i]');
   if (like && row) { const L = lists.get(row.closest('[data-list]').dataset.list); toggleLike(L.shown[+row.dataset.i]).then(() => checkLiked([])); return; }
+  if (row && !e.target.closest('a,button') && isMobile()) return playFromList(lists.get(row.closest('[data-list]').dataset.list), +row.dataset.i);
   if (row && !e.target.closest('a')) {
     $$('.tr.sel').forEach(r => r.classList.remove('sel'));
     lists.forEach(x => x.sel = null);
@@ -880,15 +915,16 @@ function updateBigPlay(b) {
 }
 
 // rechtsklikmenu
-document.addEventListener('contextmenu', e => {
+document.addEventListener('contextmenu', e => openContext(e) && e.preventDefault());
+/** Het menu bij een nummer, kaart of playlist; geeft true als er een menu was. */
+function openContext(e) {
   const side = e.target.closest('[data-side]');
-  if (side) { e.preventDefault(); return sideMenu(e.clientX, e.clientY, side.dataset.side); }
+  if (side) { sideMenu(e.clientX, e.clientY, side.dataset.side); return true; }
   const fold = e.target.closest('[data-fold]');
-  if (fold && !fold.dataset.fold.startsWith('sp:')) { e.preventDefault(); return folderHeadMenu(e.clientX, e.clientY, fold.dataset.fold); }
+  if (fold && !fold.dataset.fold.startsWith('sp:')) { folderHeadMenu(e.clientX, e.clientY, fold.dataset.fold); return true; }
   const row = e.target.closest('.tr[data-i], .q[data-uri], .pi[data-uri]');
   const card = e.target.closest('[data-card]');
-  if (!row && !card) return;
-  e.preventDefault();
+  if (!row && !card) return false;
   if (row?.dataset.i) {
     const L = lists.get(row.closest('[data-list]').dataset.list);
     trackMenu(e.clientX, e.clientY, L.shown[+row.dataset.i], () => playFromList(L, +row.dataset.i), L);
@@ -908,7 +944,28 @@ document.addEventListener('contextmenu', e => {
     if (kind === 'artist') items.splice(1, 1);
     menu(e.clientX, e.clientY, items);
   }
-});
+  return true;
+}
+// Op de telefoon: lang drukken = rechtsklikken; ⋯ in een rij doet hetzelfde.
+let pressT = null, pressAt = null;
+document.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  pressAt = { x: t.clientX, y: t.clientY, target: e.target };
+  clearTimeout(pressT);
+  pressT = setTimeout(() => {
+    if (!pressAt) return;
+    if (openContext({ target: pressAt.target, clientX: pressAt.x, clientY: pressAt.y })) { navigator.vibrate?.(12); pressAt.done = true; }
+  }, 480);
+}, { passive: true });
+document.addEventListener('touchmove', e => { const t = e.touches[0]; if (pressAt && Math.hypot(t.clientX - pressAt.x, t.clientY - pressAt.y) > 10) { clearTimeout(pressT); pressAt = null; } }, { passive: true });
+document.addEventListener('touchend', e => { clearTimeout(pressT); if (pressAt?.done) e.preventDefault(); pressAt = null; });
+document.addEventListener('click', e => {
+  const m = e.target.closest('[data-more]');
+  if (!m) return;
+  e.stopPropagation();
+  const r = m.getBoundingClientRect();
+  openContext({ target: m, clientX: r.left, clientY: r.bottom });
+}, true);
 
 function trackMenu(x, y, t, playFn, L) {
   const liked = S.liked.get(t.uri);
@@ -1787,7 +1844,7 @@ const views = {
     $('#top-title').textContent = 'Instellingen';
     const theme = store.get('theme', 'system');
     el.innerHTML = `<h1 class="page">Instellingen</h1><div class="settings">
-      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Deze Mac heet in Spotify Connect <b style="color:var(--ink)">Spotimfy op deze Mac</b>.</p>
+      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Dit apparaat heet in Spotify Connect <b style="color:var(--ink)">${esc(S.deviceName || 'Spotimfy')}</b>.</p>
         <div class="field"><button class="ghost" id="set-logout">Uitloggen</button></div></div>
       <div class="box"><h3>Eigen Client ID</h3>
         <p>Voor de bibliotheek, zoeken en statistieken gebruikt Spotimfy de Web API. Met een eigen app in het Spotify-dashboard heb je daar een eigen limiet voor.</p>
@@ -2563,6 +2620,18 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Enter' && selList?.body?.isConnected && selList.sel != null) return playFromList(selList, selList.sel);
 });
+
+/** Terugknop (Android): eerst sluiten wat open staat, dan een pagina terug. */
+window.spotimfyBack = () => {
+  const ask = $('#ask');
+  if (ask) { ask.remove(); return true; }
+  if (!$('#menu').hidden || !$('#palette').hidden) { closeOverlays(); return true; }
+  if (!$('#lyrics-full').hidden) { $('#lyrics-full').hidden = true; return true; }
+  if (S.panel) { togglePanel(S.panel); return true; }
+  if (hist.length) { back(); return true; }
+  if (cur?.where !== 'home') { go('home'); return true; }
+  return false;
+};
 
 // ——— thema ———
 function setIsland(on) {

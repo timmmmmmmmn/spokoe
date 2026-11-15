@@ -1,0 +1,6 @@
+<resources>
+    <!-- Uit het icoon: marineblauw en limoengroen -->
+    <color name="page_bg">#0A0F3F</color>
+    <color name="brand">#A3EC55</color>
+    <color name="icon_bg">#0B1482</color>
+</resources>

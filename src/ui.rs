@@ -159,7 +159,7 @@ fn handle(text: &str) {
             send(json!({
                 "type": "config",
                 "clientId": crate::settings::get("clientId"),
-                "redirect": player::REDIRECT,
+                "redirect": player::REDIRECT, "deviceName": player::DEVICE_NAME,
             }));
         }
         "login" => player::send(Cmd::Login),

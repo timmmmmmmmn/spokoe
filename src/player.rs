@@ -41,6 +41,12 @@ const SCOPES: &[&str] = &[
     "playlist-modify-public",
 ];
 
+/// Zo heet dit apparaat in Spotify Connect.
+#[cfg(target_os = "android")]
+pub const DEVICE_NAME: &str = "Spotimfy op deze telefoon";
+#[cfg(not(target_os = "android"))]
+pub const DEVICE_NAME: &str = "Spotimfy op deze Mac";
+
 /// Het adres dat je bij je eigen app in het Spotify-dashboard invult.
 pub const REDIRECT: &str = "http://127.0.0.1:8888/callback";
 
@@ -81,7 +87,13 @@ pub fn send(cmd: Cmd) {
     }
 }
 
+/// Op Android geeft de app zijn eigen map door; op de Mac is het Application Support.
+pub static DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 pub fn data_dir() -> PathBuf {
+    if let Some(dir) = DATA_DIR.get() {
+        return dir.clone();
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join("Library/Application Support/Spotimfy")
 }
@@ -187,16 +199,21 @@ async fn connect(st: &mut State, browser: bool) -> bool {
         _ => {
             // Inloggen via de browser met het Client ID van de desktop-app (alleen dat mag afspelen).
             let client_id = session_config.client_id.clone();
+            #[cfg(not(target_os = "android"))]
             let got = tokio::task::spawn_blocking(move || {
                 librespot_oauth::OAuthClientBuilder::new(&client_id, "http://127.0.0.1:8898/login", vec!["streaming"])
                     .open_in_browser()
                     .with_custom_message(DONE_PAGE)
                     .build()
                     .and_then(|c| c.get_access_token())
+                    .map(|t| t.access_token)
             })
             .await;
+            // Android: de app opent de inlogpagina zelf (librespot kan dat daar niet).
+            #[cfg(target_os = "android")]
+            let got = tokio::task::spawn_blocking(move || crate::oauth::authorize(&client_id, "http://127.0.0.1:8898/login", &["streaming"], None).map(|t| t.0)).await;
             match got {
-                Ok(Ok(t)) => Credentials::with_access_token(t.access_token),
+                Ok(Ok(t)) => Credentials::with_access_token(t),
                 Ok(Err(e)) => {
                     status("needs-login", json!({ "message": e.to_string() }));
                     return false;
@@ -248,7 +265,7 @@ async fn connect(st: &mut State, browser: bool) -> bool {
     let events = player.get_player_event_channel();
     let volume = if bp { u16::MAX } else { settings::get("volume").as_u64().map(|v| v as u16).unwrap_or(u16::MAX / 2) };
     let connect_config = ConnectConfig {
-        name: "Spotimfy op deze Mac".into(),
+        name: DEVICE_NAME.into(),
         device_type: DeviceType::Computer,
         initial_volume: volume,
         ..ConnectConfig::default()
@@ -256,7 +273,8 @@ async fn connect(st: &mut State, browser: bool) -> bool {
     let made = tokio::time::timeout(Duration::from_secs(20), Spirc::new(connect_config, session.clone(), credentials, player, mixer)).await;
     let (spirc, task) = match made {
         Ok(Ok(x)) => x,
-        Ok(Err(e)) if matches!(e.kind, ErrorKind::Unauthenticated | ErrorKind::PermissionDenied) => {
+        // Spotify weigert de opgeslagen login (verlopen, of van een ander apparaat): opnieuw inloggen.
+        Ok(Err(e)) if matches!(e.kind, ErrorKind::Unauthenticated | ErrorKind::PermissionDenied) || e.to_string().contains("INVALID_CREDENTIALS") || e.to_string().contains("denied") => {
             // Opgeslagen inlog werkt niet meer: opnieuw via de browser.
             status("needs-login", json!({ "message": e.to_string() }));
             return false;
@@ -518,6 +536,19 @@ async fn token(st: &mut State) -> Result<(String, u64), String> {
             return Ok((t.access_token, t.expires_in.as_secs()));
         }
     }
+    #[cfg(target_os = "android")]
+    {
+        let (access, refresh_new, secs) = tokio::task::spawn_blocking(move || crate::oauth::authorize(&client_id, REDIRECT, SCOPES, refresh))
+            .await
+            .map_err(|e| e.to_string())??;
+        if !refresh_new.is_empty() {
+            settings::set("refresh", json!(refresh_new));
+        }
+        st.api = Some(ApiToken { access: access.clone(), expires: SystemTime::now() + Duration::from_secs(secs) });
+        return Ok((access, secs));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
     let got = tokio::task::spawn_blocking(move || {
         let client = librespot_oauth::OAuthClientBuilder::new(&client_id, REDIRECT, SCOPES.to_vec())
             .open_in_browser()
@@ -539,6 +570,7 @@ async fn token(st: &mut State) -> Result<(String, u64), String> {
     let secs = got.expires_at.saturating_duration_since(std::time::Instant::now()).as_secs();
     st.api = Some(ApiToken { access: got.access_token.clone(), expires: SystemTime::now() + Duration::from_secs(secs) });
     Ok((got.access_token, secs))
+    }
 }
 
 /// De songtekst zoals de officiële app hem toont (met tijden per regel).

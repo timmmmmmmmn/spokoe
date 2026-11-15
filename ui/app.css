@@ -577,3 +577,118 @@ html[data-theme="vinyl-dark"] #side { background: repeating-linear-gradient(92de
 html.vinyl .card .cover, html.vinyl .tile img { border-radius: 3px; }
 html.vinyl .big-play, html.vinyl #b-play { box-shadow: 0 6px 18px rgba(0,0,0,.25); }
 html.vinyl .liked-ph { background: radial-gradient(circle at 50% 50%, var(--accent) 0 22%, #111 23% 100%) !important; color: var(--accent-ink) !important; }
+
+/* ——— Nu speelt: extra knoppen ——— */
+.lf-ctl #lf-shuffle, .lf-ctl #lf-repeat { width: 40px; height: 40px; }
+.lf-ctl #lf-shuffle svg, .lf-ctl #lf-repeat svg { width: 20px; height: 20px; }
+.lf-ctl .icon.on, .lf-extra .icon.on { color: var(--accent); }
+.lf-extra { display: flex; justify-content: space-between; margin-top: 14px; }
+.lf-extra .icon { color: rgba(255,255,255,.75); width: 40px; height: 40px; }
+.lf-extra .icon svg { width: 20px; height: 20px; }
+
+/* ——— telefoon ——— */
+#mnav, .more-btn { display: none; }
+html.mobile { --safe-top: 24px; --safe-bottom: 16px; }
+html.mobile body { font-size: 14.5px; -webkit-tap-highlight-color: transparent; }
+html.mobile #app { grid-template-columns: 1fr; grid-template-rows: 1fr; height: 100vh; }
+html.mobile #side { display: none; }
+html.mobile #main { grid-row: 1; }
+html.mobile #top { height: calc(var(--safe-top) + 48px); padding: 0 12px 4px; }
+html.mobile #fwd { display: none; }
+html.mobile #view { padding: calc(var(--safe-top) + 56px) 16px calc(var(--safe-bottom) + 170px); }
+html.mobile h1.page { font-size: 30px; margin-bottom: 16px; }
+html.mobile h2 { font-size: 18px; margin: 24px 0 10px; }
+
+/* zwevende navigatie (Tim app style): pil met vier tabs + ronde knop */
+html.mobile #mnav { display: flex; position: fixed; z-index: 20; left: 12px; right: 12px; bottom: calc(var(--safe-bottom) + 10px); gap: 10px; align-items: center; }
+.mnav-pill { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); background: color-mix(in srgb, var(--surface) 94%, transparent); border: 1px solid var(--line); border-radius: 22px; padding: 5px; box-shadow: var(--shadow); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.mnav-pill button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 0 6px; border-radius: 17px; color: var(--ink-2); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.mnav-pill button svg { width: 20px; height: 20px; }
+.mnav-pill button.on { background: var(--accent); color: var(--accent-ink); }
+.mnav-add { width: 58px; height: 58px; border-radius: 20px; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; box-shadow: var(--shadow); flex: none; }
+.mnav-add svg { width: 24px; height: 24px; }
+.mnav-add.on { outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* minispeler boven de navigatie */
+html.mobile #bar { position: fixed; z-index: 19; left: 12px; right: 12px; bottom: calc(var(--safe-bottom) + 80px); height: 62px; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 0 10px 0 8px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--surface-2) 96%, transparent); box-shadow: var(--shadow); overflow: hidden; backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+html.mobile #np { gap: 10px; }
+html.mobile #np-cover, html.mobile #np-disc { width: 44px; height: 44px; border-radius: 8px; }
+html.mobile #np-disc { border-radius: 50%; }
+html.mobile #np-like { display: none; }
+html.mobile #ctl { display: contents; }
+html.mobile #ctl-buttons { gap: 2px; }
+html.mobile #b-shuffle, html.mobile #b-repeat, html.mobile #b-prev { display: none; }
+html.mobile #b-play { width: 40px; height: 40px; background: none; color: var(--ink); }
+html.mobile #b-play svg { width: 22px; height: 22px; }
+html.mobile #b-next svg { width: 20px; height: 20px; }
+html.mobile #seek { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; max-width: none; gap: 0; }
+html.mobile #seek span { display: none; }
+html.mobile #seek .range { height: 2px; pointer-events: none; }
+html.mobile #seek .range::before, html.mobile #seek .range .fill { height: 2px; border-radius: 0; }
+html.mobile #seek .range .fill { background: var(--accent); }
+html.mobile #extra, html.mobile #offline { display: none; }
+
+html.mobile #toast { bottom: calc(var(--safe-bottom) + 154px); }
+
+/* lijsten: hoes, titel, ⋯ */
+html.mobile .tr, html.mobile .tracks.with-added .tr, html.mobile .tracks.no-album .tr, html.mobile .tracks.no-album.with-added .tr { grid-template-columns: minmax(0, 1fr) 36px; gap: 6px; height: 54px; padding: 0 2px; }
+html.mobile .tr .n, html.mobile .tr .al, html.mobile .tr .ad, html.mobile .tr .d, html.mobile .tr .like { display: none; }
+html.mobile .tr.head { display: none; }
+html.mobile .more-btn { display: grid; color: var(--ink-3); }
+html.mobile .tr .main img { width: 44px; height: 44px; }
+html.mobile .tr.now .main::before { content: ""; width: 3px; height: 26px; border-radius: 2px; background: var(--accent); margin-right: -6px; }
+html.mobile .filter { width: 100%; margin: 6px 0 0; }
+html.mobile .actions { flex-wrap: wrap; gap: 10px; }
+
+/* kop van album/playlist: hoes boven, tekst eronder */
+html.mobile .hero { flex-direction: column; align-items: flex-start; gap: 16px; margin: calc(-56px - var(--safe-top)) -16px 0; padding: calc(var(--safe-top) + 60px) 16px 18px; }
+html.mobile .hero img, html.mobile .hero .ph, html.mobile .made-cover.big { width: 190px; height: 190px; align-self: center; }
+html.mobile .hero.has-sleeve { gap: 16px; }
+html.mobile .sleeve { align-self: flex-start; margin-left: 4px; transform: scale(.82); transform-origin: left top; margin-bottom: -36px; }
+html.mobile .hero h1 { font-size: 30px; margin: 4px 0 8px; }
+html.mobile .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+html.mobile .row-scroll { grid-auto-columns: 138px; gap: 6px; margin: 0 -16px; padding: 0 16px 6px; }
+html.mobile .card { padding: 6px; }
+html.mobile .card .play { display: none; }
+html.mobile .quick { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+html.mobile .tile { height: 54px; gap: 10px; }
+html.mobile .tile img, html.mobile .tile .ph { width: 54px; height: 54px; }
+html.mobile .tile span { font-size: 13px; }
+html.mobile .tile .play { display: none; }
+html.mobile .search-top { grid-template-columns: 1fr; gap: 0; }
+html.mobile .search-box input { font-size: 16px; }
+html.mobile .row-set { grid-template-columns: 1fr auto; }
+html.mobile .row-set input[type=range] { grid-column: 1 / -1; }
+html.mobile .row-set select { max-width: 60vw; }
+html.mobile .eq-bands { height: 170px; }
+html.mobile .settings .box:has(#set-cid) { display: none; }
+
+/* menu's als vel van onderen */
+html.mobile #menu { left: 8px !important; right: 8px; top: auto !important; bottom: calc(var(--safe-bottom) + 8px); max-height: 70vh; overflow-y: auto; border-radius: 18px; padding: 8px; }
+html.mobile #menu button { padding: 13px 14px; font-size: 15px; }
+
+/* wachtrij en songtekst als vel */
+html.mobile #panel { position: fixed; inset: 0; z-index: 30; width: auto; border: 0; padding-top: var(--safe-top); }
+html.mobile .panel-head { padding: 10px 12px; }
+
+/* Nu speelt op de telefoon: alles onder elkaar, songtekst met één tik */
+html.mobile #lyrics-full { z-index: 35; }
+html.mobile .lf-side { position: absolute; left: 22px; right: 22px; top: calc(var(--safe-top) + 64px); transform: none; width: auto; }
+html.mobile .lf-cover { width: 100%; max-width: 420px; margin: 0 auto; display: block; border-radius: 12px; }
+html.mobile .lf-close { top: calc(var(--safe-top) + 10px); right: 12px; transform: rotate(-90deg); }
+html.mobile .lf-lines { display: none; left: 0 !important; top: calc(var(--safe-top) + 60px); bottom: 300px; padding: 30vh 22px 40vh !important; }
+html.mobile .lf-lines p { font-size: 26px !important; }
+html.mobile #lyrics-full.show-lyrics .lf-lines { display: block; }
+html.mobile #lyrics-full.show-lyrics .lf-cover { display: none; }
+html.mobile #lyrics-full.show-lyrics .lf-side { top: auto; bottom: calc(var(--safe-bottom) + 20px); }
+html.mobile #lyrics-full.show-lyrics #lf-lyr { color: var(--accent); }
+html.mobile #lyrics-full.no-lyrics .lf-side { left: 22px; transform: none; width: auto; }
+html.mobile #login { padding: 24px; }
+html.mobile .login-card .logo img { width: 110px; height: 110px; }
+#np.no-cover::before { content: ""; width: 56px; height: 56px; border-radius: 7px; flex: none; background: radial-gradient(circle, var(--accent) 0 18%, #000 19% 62%, transparent 63%), var(--surface-2); }
+#np.no-cover #np-cover { display: none; }
+html.mobile #np.no-cover::before { width: 44px; height: 44px; border-radius: 8px; }
+html.mobile body:not(.has-track) #bar { display: none; }
+html.mobile #back:disabled { visibility: hidden; }
+html.mobile .pill { padding: 7px 12px; font-size: 13px; }
+html.mobile .actions[style] { flex-wrap: nowrap; overflow-x: auto; }

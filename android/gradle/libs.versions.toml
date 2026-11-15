@@ -1,0 +1,13 @@
+[versions]
+agp = "9.4.1"
+coreKtx = "1.10.1"
+activity = "1.8.0"
+media = "1.7.0"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity = { group = "androidx.activity", name = "activity", version.ref = "activity" }
+androidx-media = { group = "androidx.media", name = "media", version.ref = "media" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
