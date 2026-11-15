@@ -32,6 +32,8 @@ struct Ui {
     now: Retained<NSMenuItem>,
     toggle: Retained<NSMenuItem>,
     ready: bool,
+    /// Het grote venster van voor de minispeler.
+    big: Option<CGRect>,
     /// Berichten van voordat de pagina klaar was.
     queue: Vec<String>,
 }
@@ -50,7 +52,7 @@ fn run_js(web: &WKWebView, js: &str) {
 
 /// Een bericht naar de pagina (vanaf elke thread).
 pub fn send(msg: Value) {
-    let js = format!("window.draai&&draai.recv({msg})");
+    let js = format!("window.spotimfy&&spotimfy.recv({msg})");
     dispatch2::DispatchQueue::main().exec_async(move || {
         with_ui(|ui| {
             if ui.ready {
@@ -118,6 +120,11 @@ fn handle(text: &str) {
         }
         "token" => player::send(Cmd::Token { id: num("id") as u64 }),
         "lyrics" => player::send(Cmd::Lyrics { id: num("id") as u64, track: msg["track"].as_str().unwrap_or("").into() }),
+        "meta" => player::send(Cmd::Meta {
+            id: num("id") as u64,
+            kind: msg["kind"].as_str().unwrap_or("").into(),
+            arg: msg["arg"].as_str().unwrap_or("").into(),
+        }),
         "play" => player::send(Cmd::Play(msg.clone())),
         "toggle" => player::send(Cmd::Toggle),
         "pause" => player::send(Cmd::Pause),
@@ -142,8 +149,40 @@ fn handle(text: &str) {
             pb.setString_forType(&NSString::from_str(msg["text"].as_str().unwrap_or("")), unsafe { NSPasteboardTypeString });
         }
         "show" => show_window(),
+        "mini" => set_mini(msg["on"].as_bool().unwrap_or(false)),
+        "island" => crate::settings::set("island", msg["on"].clone()),
         _ => {}
     }
+}
+
+/// Minispeler: een klein venstertje rechtsboven dat boven alles blijft.
+fn set_mini(on: bool) {
+    let mtm = MainThreadMarker::new().unwrap();
+    with_ui(|ui| {
+        let w = &ui.window;
+        if on {
+            if ui.big.is_none() {
+                ui.big = Some(w.frame());
+            }
+            w.setMinSize(CGSize::new(300.0, 116.0));
+            w.setLevel(3); // NSFloatingWindowLevel
+            w.setCollectionBehavior(objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces);
+            let screen = w.screen().or_else(|| objc2_app_kit::NSScreen::mainScreen(mtm));
+            let size = CGSize::new(380.0, 128.0);
+            let origin = screen.map(|s| {
+                let v = s.visibleFrame();
+                CGPoint::new(v.origin.x + v.size.width - size.width - 16.0, v.origin.y + v.size.height - size.height - 16.0)
+            });
+            w.setFrame_display_animate(CGRect::new(origin.unwrap_or(CGPoint::ZERO), size), true, true);
+        } else {
+            w.setLevel(0);
+            w.setCollectionBehavior(objc2_app_kit::NSWindowCollectionBehavior::Default);
+            w.setMinSize(CGSize::new(720.0, 520.0));
+            if let Some(f) = ui.big.take() {
+                w.setFrame_display_animate(f, true, true);
+            }
+        }
+    });
 }
 
 pub fn show_window() {
@@ -156,7 +195,7 @@ define_class!(
     /// De titelbalk-strook: daarmee sleep je het venster (de pagina ligt eronder).
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "DraaiDragStrip"]
+    #[name = "SpotimfyDragStrip"]
     struct DragStrip;
 
     impl DragStrip {
@@ -175,7 +214,7 @@ define_class!(
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "DraaiHost"]
+    #[name = "SpotimfyHost"]
     pub struct Host;
 
     impl Host {
@@ -184,7 +223,7 @@ define_class!(
         fn remote_item(&self, sender: &NSMenuItem) {
             if let Some(cmd) = sender.representedObject().and_then(|o| o.downcast::<NSString>().ok()) {
                 let cmd = cmd.to_string();
-                if matches!(cmd.as_str(), "search" | "lyrics" | "queue" | "settings" | "back" | "forward" | "home" | "library" | "stats") {
+                 if matches!(cmd.as_str(), "search" | "nowplaying" | "lyrics" | "queue" | "settings" | "back" | "forward" | "home" | "library" | "stats") {
                     show_window();
                 }
                 remote(&cmd, None);
@@ -297,7 +336,7 @@ fn page() -> String {
 }
 
 fn load_page(web: &WKWebView) {
-    let base = NSURL::URLWithString(ns_string!("https://draai.app/"));
+    let base = NSURL::URLWithString(ns_string!("https://spotimfy.app/"));
     unsafe { web.loadHTMLString_baseURL(&NSString::from_str(&page()), base.as_deref()) };
 }
 
@@ -332,10 +371,10 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
     let sep = || NSMenuItem::separatorItem(mtm);
     let bar = NSMenu::new(mtm);
 
-    let quit = plain(mtm, "Stop Draai", Some(sel!(terminate:)), "q");
-    let hide = plain(mtm, "Verberg Draai", Some(sel!(hide:)), "h");
+    let quit = plain(mtm, "Stop Spotimfy", Some(sel!(terminate:)), "q");
+    let hide = plain(mtm, "Verberg Spotimfy", Some(sel!(hide:)), "h");
     let settings = item(mtm, host, "Instellingen…", "settings", ",", cmd);
-    submenu(mtm, &bar, "Draai", vec![settings, sep(), hide, sep(), quit]);
+    submenu(mtm, &bar, "Spotimfy", vec![settings, sep(), hide, sep(), quit]);
 
     submenu(mtm, &bar, "Wijzig", vec![
         plain(mtm, "Herstel", Some(sel!(undo:)), "z"),
@@ -357,6 +396,8 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
         sep(),
         item(mtm, host, "Songtekst", "lyrics", "l", cmd),
         item(mtm, host, "Wachtrij", "queue", "j", cmd),
+        item(mtm, host, "Nu speelt", "nowplaying", "f", NSEventModifierFlags::Command | NSEventModifierFlags::Shift),
+        item(mtm, host, "Minispeler", "mini", "m", NSEventModifierFlags::Command | NSEventModifierFlags::Option),
         sep(),
         item(mtm, host, "Terug", "back", "[", cmd),
         item(mtm, host, "Vooruit", "forward", "]", cmd),
@@ -401,7 +442,7 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
 fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Retained<NSMenuItem>, Retained<NSMenuItem>) {
     let status = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = status.button(mtm) {
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("music.note"), Some(ns_string!("Draai")));
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("music.note"), Some(ns_string!("Spotimfy")));
         if let Some(image) = image {
             image.setTemplate(true);
             button.setImage(Some(&image));
@@ -420,10 +461,10 @@ fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Re
     menu.addItem(&item(mtm, host, "Vorige", "prev", "", none));
     menu.addItem(&item(mtm, host, "Vind ik leuk", "like", "", none));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    let show = plain(mtm, "Open Draai", Some(sel!(showWindow:)), "");
+    let show = plain(mtm, "Open Spotimfy", Some(sel!(showWindow:)), "");
     unsafe { show.setTarget(Some(host)) };
     menu.addItem(&show);
-    menu.addItem(&plain(mtm, "Stop Draai", Some(sel!(terminate:)), ""));
+    menu.addItem(&plain(mtm, "Stop Spotimfy", Some(sel!(terminate:)), ""));
     status.setMenu(Some(&menu));
     (status, now, toggle)
 }
@@ -440,7 +481,7 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
         NSWindow::initWithContentRect_styleMask_backing_defer(mtm.alloc(), frame, style, NSBackingStoreType::Buffered, false)
     };
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(ns_string!("Draai"));
+    window.setTitle(ns_string!("Spotimfy"));
     window.setTitlebarAppearsTransparent(true);
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setMinSize(CGSize::new(720.0, 520.0));
@@ -448,11 +489,11 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
     window.setFrameAutosaveName(ns_string!("Hoofdvenster"));
     window.setDelegate(Some(ProtocolObject::from_ref(host)));
     window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
-    window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(0.07, 0.07, 0.08, 1.0)));
+    window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(0.059, 0.063, 0.086, 1.0)));
 
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
     let content = unsafe { config.userContentController() };
-    unsafe { content.addScriptMessageHandler_name(ProtocolObject::from_ref(host), ns_string!("draai")) };
+    unsafe { content.addScriptMessageHandler_name(ProtocolObject::from_ref(host), ns_string!("spotimfy")) };
     // Geluid uit de pagina (voorbeeldjes) mag zonder eerst te klikken.
     unsafe { config.setMediaTypesRequiringUserActionForPlayback(objc2_web_kit::WKAudiovisualMediaTypes::None) };
     let web = unsafe { WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config) };
@@ -477,32 +518,11 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
 
     let (status, now, toggle) = status_bar(mtm, host);
     load_page(&web);
-    UI.with(|cell| *cell.borrow_mut() = Some(Ui { window, web, status, now, toggle, ready: false, queue: Vec::new() }));
+    UI.with(|cell| *cell.borrow_mut() = Some(Ui { window, web, status, now, toggle, ready: false, big: None, queue: Vec::new() }));
     show_window();
 }
 
-/// Alleen om te testen: DRAAI_JS draait na het laden, DRAAI_SHOT=pad.tiff bewaart daarna een plaatje van de pagina.
-pub fn debug() {
-    let Ok(path) = std::env::var("DRAAI_SHOT") else { return };
-    let wait: u64 = std::env::var("DRAAI_WAIT").ok().and_then(|w| w.parse().ok()).unwrap_or(3);
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        dispatch2::DispatchQueue::main().exec_async(|| {
-            if let (Ok(js), Some(web)) = (std::env::var("DRAAI_JS"), with_ui(|ui| ui.web.clone())) {
-                run_js(&web, &js);
-            }
-        });
-        std::thread::sleep(std::time::Duration::from_secs(wait));
-        dispatch2::DispatchQueue::main().exec_async(move || {
-            let Some(web) = with_ui(|ui| ui.web.clone()) else { return };
-            let path = path.clone();
-            let block = block2::RcBlock::new(move |image: *mut NSImage, _e: *mut objc2_foundation::NSError| {
-                if let Some(data) = unsafe { image.as_ref() }.and_then(|i| i.TIFFRepresentation()) {
-                    let _ = std::fs::write(&path, data.to_vec());
-                }
-                std::process::exit(0);
-            });
-            unsafe { web.takeSnapshotWithConfiguration_completionHandler(None, &block) };
-        });
-    });
+/// De webview (voor het testkanaal in dev.rs).
+pub fn web() -> Option<Retained<WKWebView>> {
+    with_ui(|ui| ui.web.clone())
 }

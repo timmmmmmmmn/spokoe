@@ -1,10 +1,10 @@
 #!/bin/sh
-# Bouwt Draai en zet hem in /Programma's (/Applications).
+# Bouwt Spotimfy en zet hem in /Programma's (/Applications).
 set -e
 cd "$(dirname "$0")"
 ./bundle.sh
-pkill -x Draai 2>/dev/null || true
-rm -rf /Applications/Draai.app
-cp -R target/Draai.app /Applications/
-touch /Applications/Draai.app
-echo "Geïnstalleerd: /Applications/Draai.app"
+pkill -x Spotimfy 2>/dev/null || true
+rm -rf /Applications/Spotimfy.app
+cp -R target/Spotimfy.app /Applications/
+touch /Applications/Spotimfy.app
+echo "Geïnstalleerd: /Applications/Spotimfy.app"

@@ -1,5 +1,5 @@
 //! "Nu speelt" van macOS: titel en hoes in het Bedieningspaneel, en de mediatoetsen
-//! (▶︎⏸ ⏭ ⏮ op het toetsenbord, AirPods) bedienen Draai.
+//! (▶︎⏸ ⏭ ⏮ op het toetsenbord, AirPods) bedienen Spotimfy.
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
@@ -85,7 +85,9 @@ pub fn track(title: &str, artist: &str, album: &str, duration_ms: u32, cover: &s
             }
         });
         publish();
-        if !cover.is_empty() {
+        if cover.is_empty() {
+            INFO.with_borrow(|i| crate::island::show(&i.title, &i.artist, None));
+        } else {
             std::thread::spawn(move || fetch_cover(cover));
         }
     });
@@ -97,6 +99,7 @@ fn fetch_cover(url: String) {
         let data = NSData::with_bytes(&bytes);
         let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else { return };
         let size = image.size();
+        let for_island = image.clone();
         let block = RcBlock::new(move |_s: CGSize| NonNull::from(&*image));
         let artwork = unsafe { MPMediaItemArtwork::initWithBoundsSize_requestHandler(MPMediaItemArtwork::alloc(), size, &block) };
         let fresh = INFO.with_borrow_mut(|i| {
@@ -109,6 +112,7 @@ fn fetch_cover(url: String) {
         });
         if fresh {
             publish();
+            INFO.with_borrow(|i| crate::island::show(&i.title, &i.artist, Some(&for_island)));
         }
     });
 }

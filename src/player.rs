@@ -1,5 +1,5 @@
-//! De afspeler: librespot als Spotify Connect-apparaat ("Draai op deze Mac"), plus de
-//! tokens voor de Web API. Draait op een eigen tokio-thread; praat met de pagina via `ui::send`.
+//! De afspeler: librespot als Spotify Connect-apparaat ("Spotimfy op deze Mac"), plus de
+//! tokens voor de Web API. Spotimfyt op een eigen tokio-thread; praat met de pagina via `ui::send`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -48,6 +48,8 @@ pub enum Cmd {
     Logout,
     Token { id: u64 },
     Lyrics { id: u64, track: String },
+    /// "playlist" of "artistTop" via meta.rs.
+    Meta { id: u64, kind: String, arg: String },
     Play(Value),
     Toggle,
     Pause,
@@ -70,10 +72,15 @@ pub fn send(cmd: Cmd) {
 
 pub fn data_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/Draai")
+    PathBuf::from(home).join("Library/Application Support/Spotimfy")
 }
 
 pub fn start() {
+    // Van de werknaam Draai: login en cache meenemen.
+    let old = data_dir().with_file_name("Draai");
+    if old.exists() && !data_dir().exists() {
+        let _ = std::fs::rename(&old, data_dir());
+    }
     let (tx, rx) = unbounded_channel();
     let _ = TX.set(tx);
     std::thread::spawn(move || {
@@ -177,7 +184,7 @@ async fn connect(st: &mut State, browser: bool) {
     let events = player.get_player_event_channel();
     let volume = settings::get("volume").as_u64().map(|v| v as u16).unwrap_or(u16::MAX / 2);
     let connect_config = ConnectConfig {
-        name: "Draai op deze Mac".into(),
+        name: "Spotimfy op deze Mac".into(),
         device_type: DeviceType::Computer,
         initial_volume: volume,
         ..ConnectConfig::default()
@@ -197,7 +204,7 @@ async fn connect(st: &mut State, browser: bool) {
     status("ready", json!({ "user": user, "volume": volume as f64 / u16::MAX as f64 }));
 }
 
-const DONE_PAGE: &str = "Ingelogd! Je kunt dit tabblad sluiten en teruggaan naar Draai.";
+const DONE_PAGE: &str = "Ingelogd! Je kunt dit tabblad sluiten en teruggaan naar Spotimfy.";
 
 async fn handle(st: &mut State, cmd: Cmd) {
     match cmd {
@@ -225,6 +232,22 @@ async fn handle(st: &mut State, cmd: Cmd) {
                 Err(e) => json!({ "type": "lyrics", "id": id, "error": e }),
             };
             ui::send(reply);
+        }
+        Cmd::Meta { id, kind, arg } => {
+            let Some(live) = &st.live else { return };
+            let session = live.session.clone();
+            // Op de achtergrond: een grote playlist houdt de knoppen niet op.
+            tokio::spawn(async move {
+                let got = match kind.as_str() {
+                    "playlist" => crate::meta::playlist(&session, &arg).await,
+                    "artistTop" => crate::meta::artist_top(&session, &arg).await,
+                    _ => Err("onbekend".into()),
+                };
+                ui::send(match got {
+                    Ok(v) => json!({ "type": "meta", "id": id, "data": v }),
+                    Err(e) => json!({ "type": "meta", "id": id, "error": e }),
+                });
+            });
         }
         Cmd::Play(req) => {
             let Some(live) = &st.live else { return };

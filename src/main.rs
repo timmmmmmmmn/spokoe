@@ -1,6 +1,9 @@
-//! Draai: een snelle Spotify-speler voor de Mac. De Rust-kern speelt zelf af (librespot, als
+//! Spotimfy: een snelle Spotify-speler voor de Mac. De Rust-kern speelt zelf af (librespot, als
 //! Spotify Connect-apparaat); de interface is een lokale pagina in een WKWebView.
 
+mod dev;
+mod island;
+mod meta;
 mod nowplaying;
 mod player;
 mod settings;
@@ -19,7 +22,7 @@ fn main() {
     ui::build(mtm, &host);
     nowplaying::setup();
     player::start();
-    ui::debug();
+    dev::start();
     std::mem::forget(host);
     app.run();
 }

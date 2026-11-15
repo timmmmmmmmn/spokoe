@@ -1,11 +1,11 @@
 'use strict';
-// Draai: de interface. Afspelen gebeurt in de Rust-kern (post → webkit), bibliotheek en zoeken
+// Spotimfy: de interface. Afspelen gebeurt in de Rust-kern (post → webkit), bibliotheek en zoeken
 // via de Web API (rechtstreeks met fetch, met een token van de kern).
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const post = (cmd, o = {}) => window.webkit?.messageHandlers?.draai?.postMessage(JSON.stringify({ cmd, ...o }));
+const post = (cmd, o = {}) => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd, ...o }));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fmt = ms => {
   if (!(ms >= 0)) return '0:00';
@@ -13,8 +13,8 @@ const fmt = ms => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
 };
 const store = {
-  get(k, d) { try { const v = localStorage.getItem('draai:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem('draai:' + k, JSON.stringify(v)); } catch {} },
+  get(k, d) { try { const v = localStorage.getItem('spotimfy:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('spotimfy:' + k, JSON.stringify(v)); } catch {} },
 };
 const idOf = uri => String(uri || '').split(':').pop();
 const icon = (id, cls = '') => `<svg class="${cls}"><use href="#i-${id}"/></svg>`;
@@ -42,10 +42,10 @@ function rpc(cmd, extra = {}) {
   });
 }
 
-window.draai = {
+window.spotimfy = {
   recv(m) {
     switch (m.type) {
-      case 'token': case 'lyrics': {
+      case 'token': case 'lyrics': case 'meta': {
         const w = waiting.get(m.id);
         if (!w) return;
         waiting.delete(m.id);
@@ -181,6 +181,8 @@ function norm(t, album) {
   };
 }
 
+const withAdded = (t, x) => t && (x?.added_at ? { ...t, added: Date.parse(x.added_at) } : t);
+
 // ——— afspelen ———
 function play(o) { S.local = true; post('play', o); }
 
@@ -223,6 +225,8 @@ function onRemote(cmd, ms) {
     back: () => back(), forward: () => forward(),
     stopafter: () => { S.stopAfter = !S.stopAfter; toast(S.stopAfter ? 'Stopt na dit nummer' : 'Speelt gewoon door'); },
     sleep: () => sleepMenu($('#b-sleep')),
+    mini: () => toggleMini(),
+    nowplaying: () => $('#lyrics-full').hidden ? openLyricsFull() : ($('#lyrics-full').hidden = true),
   };
   acts[cmd]?.();
 }
@@ -270,18 +274,27 @@ function renderTrack() {
   $('#np-like').hidden = !t;
   renderLike();
   $('#t-dur').textContent = fmt(S.dur);
-  document.title = t ? `${t.name} · ${t.artists.map(a => a.name).join(', ')}` : 'Draai';
-  const bg = $('.lf-bg');
-  if (bg && t) bg.style.backgroundImage = `url("${pic(t.album.images, 640)}")`;
+  document.title = t ? `${t.name} · ${t.artists.map(a => a.name).join(', ')}` : 'Spotimfy';
+  if (t) {
+    const big = pic(t.album.images, 640);
+    $('.lf-bg').style.backgroundImage = `url("${big}")`;
+    $('.lf-cover').src = big;
+    $('.lf-title').textContent = t.name;
+    $('.lf-artist').textContent = t.artists.map(a => a.name).join(', ');
+    $('#lf-dur').textContent = fmt(S.dur);
+  }
 }
 function renderPlay() {
   const b = $('#b-play');
   b.innerHTML = icon(S.playing ? 'pause' : 'play');
   b.classList.toggle('paused', !S.playing);
   b.title = S.playing ? 'Pauzeer (spatie)' : 'Speel af (spatie)';
+  $('#lf-play').innerHTML = icon(S.playing ? 'pause' : 'play');
+  $('#lf-play').classList.toggle('paused', !S.playing);
   $('#bar').classList.toggle('remote', !!S.remote && !S.local);
   const bp = $('.big-play[data-ctx]');
   if (bp) updateBigPlay(bp);
+  markNow();
 }
 function renderModes() {
   $('#b-shuffle').classList.toggle('on', S.shuffle);
@@ -315,6 +328,7 @@ function range(el, onMove, onDone) {
 }
 let seeking = null;
 range($('#seek-bar'), f => { seeking = f * S.dur; tick(); }, f => { const ms = f * S.dur; seeking = null; ctl('seek', ms); S.pos = ms; S.at = Date.now(); });
+range($('#lf-seek-bar'), f => { seeking = f * S.dur; tick(); }, f => { const ms = f * S.dur; seeking = null; ctl('seek', ms); S.pos = ms; S.at = Date.now(); });
 range($('#vol'), f => { S.volume = f; renderVolume(); }, f => setVolume(f));
 $('#vol').addEventListener('wheel', e => { e.preventDefault(); setVolume(S.volume - e.deltaY / 800); }, { passive: false });
 
@@ -328,7 +342,20 @@ $('#b-lyrics').onclick = () => togglePanel('lyrics');
 $('#b-queue').onclick = () => togglePanel('queue');
 $('#b-devices').onclick = e => devicesMenu(e.currentTarget);
 $('#b-sleep').onclick = e => sleepMenu(e.currentTarget);
-$('#np-cover').onclick = () => openLyricsFull();
+$('#np-cover').onclick = () => document.body.classList.contains('mini') ? toggleMini() : openLyricsFull();
+$('#b-mini').onclick = () => toggleMini();
+$('#b-big').onclick = () => toggleMini();
+function toggleMini() {
+  const on = !document.body.classList.contains('mini');
+  closeOverlays();
+  $('#lyrics-full').hidden = true;
+  // Eerst het venster laten krimpen, dan pas de indeling: geen gepiep van een te kleine pagina.
+  if (on) { post('mini', { on }); setTimeout(() => document.body.classList.add('mini'), 60); }
+  else { document.body.classList.remove('mini'); post('mini', { on }); }
+}
+$('#lf-play').onclick = () => ctl('toggle');
+$('#lf-next').onclick = () => ctl('next');
+$('#lf-prev').onclick = () => $('#b-prev').onclick();
 
 /** Niets geladen en op ▶︎ gedrukt: verder waar je was, of je favorieten. */
 async function resumeSomething() {
@@ -343,6 +370,11 @@ function tick() {
   $('#seek-bar .fill').style.width = f * 100 + '%';
   $('#seek-bar .knob').style.left = f * 100 + '%';
   $('#t-pos').textContent = fmt(pos);
+  if (!$('#lyrics-full').hidden) {
+    $('#lf-seek-bar .fill').style.width = f * 100 + '%';
+    $('#lf-seek-bar .knob').style.left = f * 100 + '%';
+    $('#lf-pos').textContent = fmt(pos);
+  }
   lyricsTick(pos);
   sleepTick();
 }
@@ -377,7 +409,7 @@ async function pollRemote(now) {
     try {
       const p = await api('/me/player');
       if (p?.device && !S.local) {
-        const mine = p.device.name === 'Draai op deze Mac';
+        const mine = p.device.name === 'Spotimfy op deze Mac';
         if (!mine) {
           S.remote = p; S.device = p.device.name;
           S.playing = p.is_playing; S.pos = p.progress_ms || 0; S.at = Date.now();
@@ -397,8 +429,8 @@ async function devicesMenu(anchor) {
   try { list = (await api('/me/player/devices'))?.devices || []; } catch (e) { return toast(e.message); }
   const items = [{ label: 'Speel af op', header: true }];
   for (const d of list) {
-    items.push({ label: d.name === 'Draai op deze Mac' ? 'Deze Mac' : d.name, check: d.is_active, fn: async () => {
-      if (d.name === 'Draai op deze Mac') { if (S.track) play({ tracks: [S.track.uri], position: Math.round(position()) }); return; }
+    items.push({ label: d.name === 'Spotimfy op deze Mac' ? 'Deze Mac' : d.name, check: d.is_active, fn: async () => {
+      if (d.name === 'Spotimfy op deze Mac') { if (S.track) play({ tracks: [S.track.uri], position: Math.round(position()) }); return; }
       try { await api('/me/player', { method: 'PUT', body: { device_ids: [d.id], play: true } }); S.local = false; setTimeout(() => pollRemote(true), 600); } catch (e) { toast(e.message); }
     } });
   }
@@ -408,11 +440,11 @@ async function devicesMenu(anchor) {
 
 // ——— vind ik leuk ———
 async function checkLiked(tracks) {
-  const ids = tracks.filter(t => t?.id || t?.uri?.startsWith('spotify:track:')).map(t => t.id || idOf(t.uri)).filter(id => !S.liked.has('spotify:track:' + id));
-  for (let i = 0; i < ids.length; i += 50) {
-    const chunk = ids.slice(i, i + 50);
-    const r = await soft(api('/me/tracks/contains?ids=' + chunk.join(',')));
-    if (Array.isArray(r)) chunk.forEach((id, j) => S.liked.set('spotify:track:' + id, r[j]));
+  const uris = [...new Set(tracks.filter(t => t?.uri?.startsWith('spotify:track:')).map(t => t.uri))].filter(u => !S.liked.has(u));
+  for (let i = 0; i < uris.length; i += 40) {
+    const chunk = uris.slice(i, i + 40);
+    const r = await soft(api('/me/library/contains?uris=' + chunk.join(',')));
+    if (Array.isArray(r)) chunk.forEach((u, j) => S.liked.set(u, r[j]));
   }
   renderLike();
   $$('.tr[data-uri]').forEach(row => { const on = S.liked.get(row.dataset.uri); const b = $('.like', row); if (b) { b.classList.toggle('on', !!on); b.innerHTML = icon(on ? 'heart-on' : 'heart'); } });
@@ -423,8 +455,8 @@ async function toggleLike(t) {
   renderLike();
   checkLiked([]);
   try {
-    await api('/me/tracks?ids=' + idOf(t.uri), { method: on ? 'PUT' : 'DELETE' }).catch(async e => {
-      if (e.status === 403 || e.status === 404 || e.status === 410) return api('/me/library?uris=' + encodeURIComponent(t.uri), { method: on ? 'PUT' : 'DELETE' });
+    await api('/me/library?uris=' + t.uri, { method: on ? 'PUT' : 'DELETE' }).catch(e => {
+      if (e.status === 403 || e.status === 404) return api('/me/tracks?ids=' + idOf(t.uri), { method: on ? 'PUT' : 'DELETE' });
       throw e;
     });
     memo.forEach((v, k) => k.startsWith('/me/tracks') && memo.delete(k));
@@ -444,6 +476,7 @@ function go(where, arg, push = true) {
 function back() { if (!hist.length) return; cur.scroll = $('#view').scrollTop; ahead.push(cur); cur = hist.pop(); show(cur); }
 function forward() { if (!ahead.length) return; cur.scroll = $('#view').scrollTop; hist.push(cur); cur = ahead.pop(); show(cur); }
 $('#back').onclick = back;
+$('#side-new').onclick = () => newPlaylist();
 $('#fwd').onclick = forward;
 
 let renderId = 0;
@@ -479,24 +512,29 @@ let lists = new Map(), listSeq = 0;
 /** Een nummerlijst. ctx = { uri } (afspelen in die context) of null (als losse lijst). */
 function trackList(el, tracks, { ctx, album = true, numbers = false, cover = true } = {}) {
   const key = 'l' + (++listSeq);
-  const L = { tracks, shown: tracks, ctx, key };
+  const L = { tracks, shown: tracks, ctx, key, sort: null, q: '' };
   lists.set(key, L);
   el.classList.add('tracks');
   if (!album) el.classList.add('no-album');
   el.dataset.list = key;
-  const head = `<div class="tr head"><div class="n">#</div><div>Titel</div><div class="al">Album</div><div></div><div class="d">${icon('clock')}</div></div>`;
+  const added = () => L.tracks.some(t => t.added);
+  const arrow = k => L.sort?.k === k ? (L.sort.dir > 0 ? ' ↑' : ' ↓') : '';
+  const head = () => `<div class="tr head"><div class="n">#</div><div data-sort="name">Titel${arrow('name')}</div><div class="al" data-sort="album">Album${arrow('album')}</div>${added() ? `<div class="ad" data-sort="added">Toegevoegd${arrow('added')}</div>` : ''}<div></div><div class="d" data-sort="duration">${arrow('duration')}${icon('clock')}</div></div>`;
   let n = 0;
-  const row = (t, i) => `<div class="tr${t.playable === false ? ' unplayable' : ''}" data-i="${i}" data-uri="${esc(t.uri)}">
-    <div class="n"><span>${numbers && t.number ? t.number : i + 1}</span></div>
+  const day = ms => new Date(ms).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' });
+  const row = (t, i) => `<div class="tr${t.playable === false ? ' unplayable' : ''}" data-i="${i}" data-uri="${esc(t.uri)}" draggable="true">
+    <div class="n"><span>${numbers && t.number ? t.number : i + 1}</span><i class="eq"><b></b><b></b><b></b></i></div>
     <div class="main">${cover ? img(t.album.images, 64) : ''}<div><div class="t">${t.explicit ? '<span class="E">E</span>' : ''}${esc(t.name)}</div>
     <div class="a">${t.artists.map(a => a.id ? `<a data-go="artist:${esc(a.id)}">${esc(a.name)}</a>` : esc(a.name)).join(', ')}</div></div></div>
     <div class="al">${t.album.id ? `<a data-go="album:${esc(t.album.id)}">${esc(t.album.name)}</a>` : esc(t.album.name)}</div>
+    ${added() ? `<div class="ad">${t.added ? day(t.added) : ''}</div>` : ''}
     <button class="icon like${S.liked.get(t.uri) ? ' on' : ''}" data-like>${icon(S.liked.get(t.uri) ? 'heart-on' : 'heart')}</button>
     <div class="d">${fmt(t.duration)}</div></div>`;
   L.render = () => {
     const list = L.shown;
     n = Math.min(list.length, Math.max(n, 80));
-    el.innerHTML = head + list.slice(0, n).map((t, i) => row(t, i)).join('') + (n < list.length ? '<button class="more-rows loading-more">Meer…</button>' : '');
+    el.classList.toggle('with-added', added());
+    el.innerHTML = head() + list.slice(0, n).map((t, i) => row(t, i)).join('') + (n < list.length ? '<button class="more-rows loading-more">Meer…</button>' : '');
     const m = $('.more-rows', el);
     if (m) m.onclick = () => {
       const from = n;
@@ -509,11 +547,25 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
     markNow();
   };
   L.filter = q => {
-    q = q.trim().toLowerCase();
-    L.shown = !q ? L.tracks : L.tracks.filter(t => (t.name + ' ' + t.artists.map(a => a.name).join(' ') + ' ' + t.album.name).toLowerCase().includes(q));
+    if (q !== undefined) L.q = q.trim().toLowerCase();
+    let list = !L.q ? L.tracks : L.tracks.filter(t => (t.name + ' ' + t.artists.map(a => a.name).join(' ') + ' ' + t.album.name).toLowerCase().includes(L.q));
+    if (L.sort) {
+      const { k, dir } = L.sort;
+      const val = t => k === 'name' ? t.name.toLowerCase() : k === 'album' ? t.album.name.toLowerCase() : k === 'added' ? t.added || 0 : t.duration || 0;
+      list = [...list].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * dir);
+    }
+    L.shown = list;
     n = 0;
     L.render();
   };
+  // Op een kolomkop klikken: oplopend, aflopend, weer zoals het was.
+  el.addEventListener('click', e => {
+    const h = e.target.closest('.head [data-sort]');
+    if (!h) return;
+    const k = h.dataset.sort;
+    L.sort = L.sort?.k !== k ? { k, dir: k === 'added' ? -1 : 1 } : L.sort.dir === (k === 'added' ? -1 : 1) ? { k, dir: -L.sort.dir } : null;
+    L.filter();
+  });
   L.render();
   checkLiked(tracks.slice(0, 80));
   return L;
@@ -532,11 +584,20 @@ function playFromList(L, i) {
   }
 }
 
+const sameSong = (a, b) => a && b && (a.uri === b.uri || (a.name.toLowerCase() === b.name.toLowerCase() && a.artists[0]?.name === b.artists[0]?.name));
 function markNow() {
-  const uri = S.track?.uri;
-  $$('.tr.now').forEach(r => r.classList.remove('now'));
-  if (uri) $$(`.tr[data-uri="${CSS.escape(uri)}"]`).forEach(r => r.classList.add('now'));
-  $$('.q.now').forEach(r => r.classList.remove('now'));
+  const t = S.track;
+  $$('.tr.now').forEach(r => r.classList.remove('now', 'paused'));
+  if (t) {
+    for (const el of $$('[data-list]')) {
+      const L = lists.get(el.dataset.list);
+      if (!L) continue;
+      $$('.tr[data-i]', el).forEach(r => { if (sameSong(L.shown[+r.dataset.i], t)) r.classList.add('now'); });
+    }
+    $$('.tr.now').forEach(r => r.classList.toggle('paused', !S.playing));
+  }
+  // De playlist die speelt, in de zijbalk.
+  $$('#side-lists button').forEach(b => b.classList.toggle('playing', !!S.ctx && b.dataset.card === S.ctx && S.local));
 }
 
 let selRow = null;
@@ -581,7 +642,7 @@ document.addEventListener('contextmenu', e => {
   e.preventDefault();
   if (row?.dataset.i) {
     const L = lists.get(row.closest('[data-list]').dataset.list);
-    trackMenu(e.clientX, e.clientY, L.shown[+row.dataset.i], () => playFromList(L, +row.dataset.i));
+    trackMenu(e.clientX, e.clientY, L.shown[+row.dataset.i], () => playFromList(L, +row.dataset.i), L);
   } else if (row) {
     const t = row._track;
     if (t) trackMenu(e.clientX, e.clientY, t, () => play({ tracks: [t.uri] }));
@@ -599,8 +660,9 @@ document.addEventListener('contextmenu', e => {
   }
 });
 
-function trackMenu(x, y, t, playFn) {
+function trackMenu(x, y, t, playFn, L) {
   const liked = S.liked.get(t.uri);
+  const own = L?.ctx?.uri?.startsWith('spotify:playlist:') && (myPlaylists.list || []).find(p => p.uri === L.ctx.uri && p.owner?.id === S.me?.id);
   const items = [
     { label: 'Afspelen', fn: playFn },
     { label: 'Speel hierna', fn: () => queueTrack(t) },
@@ -611,6 +673,7 @@ function trackMenu(x, y, t, playFn) {
     { label: liked ? 'Verwijder uit leuk' : 'Vind ik leuk', fn: () => toggleLike(t) },
     { label: 'Aan playlist toevoegen…', fn: () => addToPlaylistMenu(x, y, t) },
     { label: 'Radio op basis van dit nummer', fn: () => radio(t) },
+    ...(own ? [{ label: `Verwijder uit ${own.name}`, fn: () => removeFromPlaylist(own, t, L) }] : []),
     '-',
     { label: 'Kopieer link', fn: () => copyLink(t.uri) },
   ];
@@ -633,14 +696,56 @@ function copyLink(uri) {
 }
 async function addToPlaylistMenu(x, y, t) {
   const mine = (await myPlaylists()).filter(p => p.owner?.id === S.me?.id || p.collaborative);
-  menu(x, y, [{ label: 'Toevoegen aan', header: true }, ...mine.slice(0, 40).map(p => ({ label: p.name, fn: async () => {
+  menu(x, y, [{ label: 'Toevoegen aan', header: true }, { label: 'Nieuwe playlist…', fn: () => newPlaylist([t.uri]) }, '-', ...mine.slice(0, 40).map(p => ({ label: p.name, fn: async () => {
     try {
-      await api(`/playlists/${p.id}/items`, { method: 'POST', body: { uris: [t.uri] } })
-        .catch(e => e.status === 404 || e.status === 403 ? api(`/playlists/${p.id}/tracks`, { method: 'POST', body: { uris: [t.uri] } }) : Promise.reject(e));
-      memo.forEach((v, k) => k.includes(p.id) && memo.delete(k));
+      await addToPlaylist(p, [t.uri]);
       toast(`Toegevoegd aan ${p.name}`);
     } catch (e) { toast(e.message); }
   } }))]);
+}
+
+async function addToPlaylist(p, uris) {
+  await api(`/playlists/${p.id}/items`, { method: 'POST', body: { uris } })
+    .catch(e => e.status === 404 || e.status === 403 ? api(`/playlists/${p.id}/tracks`, { method: 'POST', body: { uris } }) : Promise.reject(e));
+  memo.forEach((v, k) => k.includes(p.id) && memo.delete(k));
+}
+async function removeFromPlaylist(p, t, L) {
+  try {
+    await api(`/playlists/${p.id}/items`, { method: 'DELETE', body: { items: [{ uri: t.uri }] } })
+      .catch(e => e.status === 404 || e.status === 403 ? api(`/playlists/${p.id}/tracks`, { method: 'DELETE', body: { tracks: [{ uri: t.uri }] } }) : Promise.reject(e));
+    memo.forEach((v, k) => k.includes(p.id) && memo.delete(k));
+    L.tracks = L.tracks.filter(x => x.uri !== t.uri);
+    L.filter();
+    toast(`Verwijderd uit ${p.name}`);
+  } catch (e) { toast(e.message); }
+}
+
+/** Een klein venstertje met één tekstveld (prompt() werkt niet in de app). */
+function ask(title, placeholder = '', value = '') {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.id = 'ask';
+    box.innerHTML = `<form class="ask-box"><h3>${esc(title)}</h3><input placeholder="${esc(placeholder)}" value="${esc(value)}" spellcheck="false"><div class="ask-btns"><button type="button" class="ghost">Annuleer</button><button class="primary">OK</button></div></form>`;
+    document.body.append(box);
+    const input = $('input', box);
+    input.focus();
+    input.select();
+    const done = v => { box.remove(); resolve(v); };
+    $('form', box).onsubmit = e => { e.preventDefault(); done(input.value.trim() || null); };
+    $('.ghost', box).onclick = () => done(null);
+    input.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
+  });
+}
+async function newPlaylist(uris = []) {
+  const name = await ask('Nieuwe playlist', 'Naam');
+  if (!name) return;
+  try {
+    const p = await api('/me/playlists', { method: 'POST', body: { name, public: false } })
+      .catch(e => e.status === 404 || e.status === 403 ? api(`/users/${S.me.id}/playlists`, { method: 'POST', body: { name, public: false } }) : Promise.reject(e));
+    if (uris.length) await addToPlaylist(p, uris);
+    renderSide(await myPlaylists(true));
+    go('playlist', p.id);
+  } catch (e) { toast(e.message); }
 }
 
 // ——— menu en melding ———
@@ -690,6 +795,47 @@ function renderSide(list) {
     list.map(p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64)}<span>${esc(p.name)}</span></button>`).join('');
 }
 
+let dragged = null;
+document.addEventListener('dragstart', e => {
+  const row = e.target.closest?.('.tr[data-i]');
+  if (!row) return;
+  const L = lists.get(row.closest('[data-list]').dataset.list);
+  dragged = L.shown[+row.dataset.i];
+  e.dataTransfer.setData('text/plain', dragged.uri);
+  e.dataTransfer.effectAllowed = 'copy';
+  const ghost = document.createElement('div');
+  ghost.className = 'drag-ghost';
+  ghost.textContent = dragged.name;
+  document.body.append(ghost);
+  e.dataTransfer.setDragImage(ghost, 10, 14);
+  setTimeout(() => ghost.remove());
+  document.body.classList.add('dragging');
+});
+document.addEventListener('dragend', () => { dragged = null; document.body.classList.remove('dragging'); $$('.drop').forEach(b => b.classList.remove('drop')); });
+$('#side-lists').addEventListener('dragover', e => {
+  const b = e.target.closest('button');
+  if (!dragged || !b || !canDrop(b)) return;
+  e.preventDefault();
+  $$('.drop').forEach(x => x !== b && x.classList.remove('drop'));
+  b.classList.add('drop');
+});
+$('#side-lists').addEventListener('dragleave', e => e.target.closest('button')?.classList.remove('drop'));
+$('#side-lists').addEventListener('drop', async e => {
+  const b = e.target.closest('button');
+  if (!dragged || !b) return;
+  e.preventDefault();
+  b.classList.remove('drop');
+  const t = dragged;
+  if (b.dataset.go === 'liked:') { if (!S.liked.get(t.uri)) toggleLike(t); return; }
+  const p = (myPlaylists.list || []).find(x => x.uri === b.dataset.card);
+  try { await addToPlaylist(p, [t.uri]); toast(`Toegevoegd aan ${p.name}`); } catch (err) { toast(err.message); }
+});
+function canDrop(b) {
+  if (b.dataset.go === 'liked:') return true;
+  const p = (myPlaylists.list || []).find(x => x.uri === b.dataset.card);
+  return p && (p.owner?.id === S.me?.id || p.collaborative);
+}
+
 // ——— de pagina's ———
 const card = (o, round) => `<div class="card${round ? ' round' : ''}" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">
   ${img(o.images, 300, 'cover')}
@@ -721,6 +867,7 @@ const views = {
       soft(get('/me/albums?limit=20', 600000)),
     ]);
     if (!alive()) return;
+    if (recent?.items) recent.items = recent.items.filter(it => it?.track?.album);
     if (recent?.items?.length) {
       const seen = new Set(), ctxs = [];
       for (const it of recent.items) {
@@ -738,7 +885,8 @@ const views = {
     }
     if (top?.items?.length) $('#h-top', el).innerHTML = `<h2>Jouw toppers van deze maand <a class="more" data-go="stats">Alles</a></h2><div class="row-scroll">${top.items.map(artistCard).join('')}</div>`;
     if (playlists.length) $('#h-lists', el).innerHTML = `<h2>Jouw playlists <a class="more" data-go="library">Bibliotheek</a></h2><div class="row-scroll">${playlists.slice(0, 20).map(playlistCard).join('')}</div>`;
-    if (albums?.items?.length) $('#h-albums', el).innerHTML = `<h2>Albums uit je bibliotheek</h2><div class="row-scroll">${albums.items.map(x => albumCard(x.album)).join('')}</div>`;
+    const libAlbums = (albums?.items || []).filter(x => x?.album);
+    if (libAlbums.length) $('#h-albums', el).innerHTML = `<h2>Albums uit je bibliotheek</h2><div class="row-scroll">${libAlbums.map(x => albumCard(x.album)).join('')}</div>`;
   },
 
   async search(el, q, alive) {
@@ -761,7 +909,7 @@ const views = {
       const tracks = (r.tracks?.items || []).filter(Boolean).map(t => norm(t));
       const artists = (r.artists?.items || []).filter(Boolean), albums = (r.albums?.items || []).filter(Boolean), pls = (r.playlists?.items || []).filter(Boolean);
       if (type === 'all') {
-        const best = artists[0] && artists[0].name.toLowerCase() === qv.toLowerCase() ? { kind: 'Artiest', o: artists[0], round: true, go: 'artist:' + artists[0].id }
+        const best = artists[0] && artists[0].name.toLowerCase().includes(qv.toLowerCase()) ? { kind: 'Artiest', o: artists[0], round: true, go: 'artist:' + artists[0].id }
           : tracks[0] ? { kind: 'Nummer', o: { ...r.tracks.items[0], images: tracks[0].album.images }, go: 'album:' + tracks[0].album.id, sub: tracks[0].artists.map(a => a.name).join(', ') }
           : artists[0] ? { kind: 'Artiest', o: artists[0], round: true, go: 'artist:' + artists[0].id } : null;
         out.innerHTML = `<div class="search-top">${best ? `<div><h2>Beste resultaat</h2><div class="top-hit${best.round ? ' round' : ''}" data-go="${esc(best.go)}" data-card="${esc(best.o.uri)}">${img(best.o.images, 200)}<div class="t">${esc(best.o.name)}</div><div class="s">${best.kind}${best.sub ? ' · ' + esc(best.sub) : ''}</div><button class="play" data-play="${esc(best.o.uri)}">${icon('play')}</button></div></div>` : '<div></div>'}
@@ -820,18 +968,23 @@ const views = {
 
   async playlist(el, id, alive) {
     const cached = (myPlaylists.list || store.get('playlists', [])).find(p => p.id === id);
-    const p = await get(`/playlists/${id}?fields=${encodeURIComponent('id,uri,name,description,images,owner(id,display_name),followers(total),collaborative,public')}`, 120000).catch(() => cached);
+    const p = await get(`/playlists/${id}`, 120000).catch(() => cached);
     if (!alive() || !p) return;
     const L = await collection(el, {
       kind: 'Playlist', title: p.name, images: p.images, uri: p.uri, desc: p.description,
       meta: `<b>${esc(p.owner?.display_name || '')}</b>${p.followers?.total ? ` · ${p.followers.total.toLocaleString('nl-NL')} volgers` : ''}`,
     }, alive);
-    await playlistItems(id, (_, all) => alive() && L.set(all.map(x => norm(x.item || x.track)).filter(Boolean)));
+    if (p.owner?.id === S.me?.id) {
+      try { await playlistItems(id, (_, all) => alive() && L.set(all.map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean))); return; } catch {}
+    }
+    // Van iemand anders: de Web API geeft de inhoud niet meer, de kern wel.
+    const r = await rpc('meta', { kind: 'playlist', arg: id });
+    if (alive()) L.set(r.data.tracks);
   },
 
   async liked(el, _, alive) {
     const L = await collection(el, { kind: 'Playlist', title: 'Nummers die je leuk vindt', liked: true, uri: `spotify:user:${S.user}:collection`, meta: `<b>${esc(S.me?.display_name || '')}</b>` }, alive);
-    await pages('/me/tracks?limit=50', (_, all) => alive() && L.set(all.map(x => norm(x.track)).filter(Boolean)));
+    await pages('/me/tracks?limit=50', (_, all) => alive() && L.set(all.map(x => withAdded(norm(x.track), x)).filter(Boolean)));
   },
 
   async album(el, id, alive) {
@@ -853,8 +1006,8 @@ const views = {
   async artist(el, id, alive) {
     const [a, top, albums] = await Promise.all([
       get(`/artists/${id}`, 3600000),
-      soft(get(`/artists/${id}/top-tracks?market=from_token`, 3600000)),
-      soft(get(`/artists/${id}/albums?include_groups=album,single&limit=50`, 3600000).catch(() => get(`/artists/${id}/albums?include_groups=album,single&limit=10`, 3600000))),
+      soft(rpc('meta', { kind: 'artistTop', arg: id }).then(r => r.data)),
+      soft(pages(`/artists/${id}/albums?include_groups=album,single&limit=10`, null, 60).then(items => ({ items }))),
     ]);
     if (!alive()) return;
     $('#top-title').textContent = a.name;
@@ -867,14 +1020,14 @@ const views = {
     updateBigPlay($('.big-play', el));
     $('#a-radio', el).onclick = () => { S.ctx = null; play({ context: 'spotify:station:artist:' + a.id }); toast('Radio gestart'); };
     const fb = $('#a-follow', el);
-    soft(api(`/me/following/contains?type=artist&ids=${a.id}`)).then(r => { if (Array.isArray(r)) { fb.classList.toggle('on', r[0]); fb.textContent = r[0] ? 'Volgend' : 'Volgen'; } });
+    soft(api(`/me/library/contains?uris=${a.uri}`)).then(r => { if (Array.isArray(r)) { fb.classList.toggle('on', r[0]); fb.textContent = r[0] ? 'Volgend' : 'Volgen'; } });
     fb.onclick = async () => {
       const on = !fb.classList.contains('on');
-      try { await api(`/me/following?type=artist&ids=${a.id}`, { method: on ? 'PUT' : 'DELETE' }); fb.classList.toggle('on', on); fb.textContent = on ? 'Volgend' : 'Volgen'; } catch (e) { toast(e.message); }
+      try { await api(`/me/library?uris=${a.uri}`, { method: on ? 'PUT' : 'DELETE' }).catch(() => api(`/me/following?type=artist&ids=${a.id}`, { method: on ? 'PUT' : 'DELETE' })); fb.classList.toggle('on', on); fb.textContent = on ? 'Volgend' : 'Volgen'; } catch (e) { toast(e.message); }
     };
-    if (top?.tracks?.length) {
+    if (top?.length) {
       $('#a-top', el).innerHTML = '<h2>Populair</h2><div></div>';
-      trackList($('#a-top div', el), top.tracks.slice(0, 10).map(t => norm(t)), { ctx: { uri: a.uri }, album: true });
+      trackList($('#a-top div', el), top, { ctx: { uri: a.uri }, album: true });
     }
     const all = albums?.items || [];
     const al = all.filter(x => x.album_type === 'album'), si = all.filter(x => x.album_type !== 'album');
@@ -889,13 +1042,13 @@ const views = {
       <section id="st-time"></section><section id="st-artists"></section><section id="st-tracks"></section>`;
     $$('#st-range button', el).forEach(b => b.classList.toggle('on', b.dataset.r === range));
     $('#st-range', el).onclick = e => { const b = e.target.closest('button'); if (b) { cur.arg = b.dataset.r; views.stats(el, b.dataset.r, alive); } };
-    // Wat Draai zelf heeft bijgehouden.
+    // Wat Spotimfy zelf heeft bijgehouden.
     const time = store.get('time', {});
     const days = [...Array(7)].map((_, i) => { const d = new Date(Date.now() - (6 - i) * 864e5); return { k: d.toISOString().slice(0, 10), label: d.toLocaleDateString('nl-NL', { weekday: 'long' }) }; });
     const max = Math.max(60, ...days.map(d => time[d.k] || 0));
     const week = days.reduce((s, d) => s + (time[d.k] || 0), 0);
     const at = Object.entries(store.get('artistTime', {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    $('#st-time', el).innerHTML = `<h2>Luistertijd in Draai <span class="sub" style="font-size:13px;font-weight:500">${Math.round(week / 60)} minuten deze week</span></h2>
+    $('#st-time', el).innerHTML = `<h2>Luistertijd in Spotimfy <span class="sub" style="font-size:13px;font-weight:500">${Math.round(week / 60)} minuten deze week</span></h2>
       <div class="bars">${days.map(d => `<div><span>${d.label}</span><i style="width:${Math.max(2, (time[d.k] || 0) / max * 100)}%"></i><span>${Math.round((time[d.k] || 0) / 60)}m</span></div>`).join('')}</div>
       ${at.length ? `<p class="sub" style="margin-top:14px">Meest gedraaid: ${at.map(([n, s]) => `<b style="color:var(--ink)">${esc(n)}</b> (${Math.round(s / 60)}m)`).join(', ')}</p>` : ''}`;
     const [ar, tr] = await Promise.all([soft(get(`/me/top/artists?time_range=${range}&limit=20`, 3600000)), soft(get(`/me/top/tracks?time_range=${range}&limit=50`, 3600000))]);
@@ -917,21 +1070,26 @@ const views = {
     $('#top-title').textContent = 'Instellingen';
     const theme = store.get('theme', 'system');
     el.innerHTML = `<h1 class="page">Instellingen</h1><div class="settings">
-      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Deze Mac heet in Spotify Connect <b style="color:var(--ink)">Draai op deze Mac</b>.</p>
+      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Deze Mac heet in Spotify Connect <b style="color:var(--ink)">Spotimfy op deze Mac</b>.</p>
         <div class="field"><button class="ghost" id="set-logout">Uitloggen</button></div></div>
       <div class="box"><h3>Eigen Client ID</h3>
-        <p>Voor de bibliotheek, zoeken en statistieken gebruikt Draai de Web API. Met een eigen app in het Spotify-dashboard heb je daar een eigen limiet voor.</p>
+        <p>Voor de bibliotheek, zoeken en statistieken gebruikt Spotimfy de Web API. Met een eigen app in het Spotify-dashboard heb je daar een eigen limiet voor.</p>
         <ol><li>Ga naar <a class="link" style="color:var(--accent)" href="https://developer.spotify.com/dashboard">developer.spotify.com/dashboard</a> en kies <b>Create app</b>.</li>
         <li>Redirect URI: <code>${esc(S.redirect || 'http://127.0.0.1:8888/callback')}</code>, en vink <b>Web API</b> aan.</li>
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
       <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="light">Licht</button><button data-t="dark">Donker</button></div></div>
+      <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spotimfy niet voorop staat.</p>
+        <div class="seg" id="set-island"><button data-v="1">Aan</button><button data-v="0">Uit</button></div></div>
       <div class="box"><h3>Sneltoetsen</h3><p>
         <kbd>spatie</kbd> afspelen/pauzeren · <kbd>⌘K</kbd> of <kbd>/</kbd> zoeken · <kbd>⌘→</kbd> <kbd>⌘←</kbd> volgende/vorige · <kbd>⇧→</kbd> <kbd>⇧←</kbd> 10 s verder/terug ·
-        <kbd>⌘↑</kbd> <kbd>⌘↓</kbd> volume · <kbd>⌘L</kbd> songtekst · <kbd>⌘J</kbd> wachtrij · <kbd>⌘D</kbd> vind ik leuk · <kbd>⌘S</kbd> shuffle · <kbd>F</kbd> songtekst op volledig scherm</p></div>
-      <div class="box"><h3>Over Draai</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
+        <kbd>⌘↑</kbd> <kbd>⌘↓</kbd> volume · <kbd>⌘L</kbd> songtekst · <kbd>⌘J</kbd> wachtrij · <kbd>⌘D</kbd> vind ik leuk · <kbd>⌘S</kbd> shuffle · <kbd>F</kbd> Nu speelt · <kbd>⌥⌘M</kbd> minispeler · sleep nummers naar een playlist in de zijbalk</p></div>
+      <div class="box"><h3>Over Spotimfy</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
     </div>`;
     $$('#set-theme button', el).forEach(b => b.classList.toggle('on', b.dataset.t === theme));
+    const isl = store.get('island', true);
+    $$('#set-island button', el).forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === isl));
+    $('#set-island', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const on = b.dataset.v === '1'; store.set('island', on); post('island', { on }); $$('#set-island button', el).forEach(x => x.classList.toggle('on', x === b)); };
     $('#set-theme', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; store.set('theme', b.dataset.t); applyTheme(); $$('#set-theme button', el).forEach(x => x.classList.toggle('on', x === b)); };
     $('#set-save', el).onclick = () => { S.clientId = $('#set-cid', el).value.trim(); post('setClientId', { id: S.clientId }); tok = null; memo.clear(); toast('Opgeslagen'); };
     $('#set-logout', el).onclick = () => { post('logout'); S.ready = false; };
@@ -955,15 +1113,16 @@ async function collection(el, o, alive) {
   $('#c-filter', el).oninput = e => L?.filter(e.target.value);
   const listEl = $('#c-list', el);
   let extraMeta = '';
-  return {
+  const coll = {
     set(list) {
       tracks = list;
-      if (!L) { listEl.innerHTML = ''; L = trackList(listEl, list, { ctx: { uri: o.uri }, album: o.album !== false, numbers: o.numbers, cover: o.cover !== false }); }
-      else { const scroll = $('#view').scrollTop; L.tracks = list; L.filter($('#c-filter', el).value); $('#view').scrollTop = scroll; }
+      if (!L) { listEl.innerHTML = ''; L = coll.L = trackList(listEl, list, { ctx: { uri: o.uri }, album: o.album !== false, numbers: o.numbers, cover: o.cover !== false }); }
+      else { const scroll = $('#view').scrollTop; L.tracks = list; L.filter(); $('#view').scrollTop = scroll; }
       $('.c-count', el).textContent = extraMeta || `· ${list.length} nummers`;
     },
     meta(t) { extraMeta = t; $('.c-count', el).textContent = t; },
   };
+  return coll;
 }
 
 /** Een zachte kleur uit de hoes achter de kop. */
@@ -993,7 +1152,7 @@ async function smartShuffle(uri, tracks) {
   if (!tracks?.length) {
     const [, kind, id] = uri.split(':');
     toast('Even alles ophalen…');
-    if (kind === 'playlist') tracks = (await playlistItems(id)).map(x => norm(x.item || x.track)).filter(Boolean);
+    if (kind === 'playlist') tracks = await playlistItems(id).then(l => l.map(x => norm(x.item || x.track)).filter(Boolean), async () => (await rpc('meta', { kind: 'playlist', arg: id })).data.tracks);
     else if (kind === 'album') { const a = await get(`/albums/${id}`); tracks = a.tracks.items.map(t => norm(t, { name: a.name, id: a.id, images: a.images })); }
     else if (uri.endsWith(':collection')) tracks = (await pages('/me/tracks?limit=50')).map(x => norm(x.track)).filter(Boolean);
   }
@@ -1113,6 +1272,7 @@ function openLyricsFull() {
 function renderLyricsFull() {
   const box = $('#lyrics-full .lf-lines');
   box.className = 'lf-lines' + (lyr?.synced ? ' synced' : '');
+  $('#lyrics-full').classList.toggle('no-lyrics', !!lyr?.none);
   box.innerHTML = lyricsHtml(true);
   renderTrack();
   lastLine = -2;
@@ -1221,7 +1381,7 @@ async function palRun() {
   const al = (r.albums?.items || []).filter(Boolean).slice(0, 3).map(a => ({ kind: 'Albums', t: a.name, s: a.artists.map(x => x.name).join(', '), uri: a.uri, images: a.images, go: 'album:' + a.id }));
   const pl = (r.playlists?.items || []).filter(Boolean).slice(0, 3).map(p => ({ kind: 'Playlists', t: p.name, s: p.owner?.display_name || '', uri: p.uri, images: p.images, go: 'playlist:' + p.id }));
   // Een artiest die precies zo heet, gaat bovenaan.
-  const exact = ar.find(a => a.t.toLowerCase() === q.toLowerCase());
+  const exact = ar.find(a => a.t.toLowerCase().includes(q.toLowerCase()));
   palDraw([...(exact ? [{ ...exact, kind: 'Beste resultaat' }] : []), ...items, ...tr, ...ar.filter(a => a !== exact), ...al, ...pl]);
 }
 function palDraw(items) {
