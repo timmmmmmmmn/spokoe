@@ -105,3 +105,48 @@ pub async fn radio(session: &Session, seed: &str, count: usize, previous: Vec<St
     }
     Ok(json!(tracks(session, uris).await))
 }
+
+/// Je playlists in de volgorde van de officiële app, met mappen.
+/// Mappen staan in de lijst als `spotify:start-group:<id>:<naam>` … `spotify:end-group:<id>`.
+pub async fn rootlist(session: &Session) -> Result<Value, String> {
+    use protobuf::Message;
+    let raw = session.spclient().get_rootlist(0, Some(1000)).await.map_err(|e| e.to_string())?;
+    let list = librespot::protocol::playlist4_external::SelectedListContent::parse_from_bytes(&raw).map_err(|e| e.to_string())?;
+    let items: Vec<Value> = list
+        .contents
+        .items
+        .iter()
+        .filter_map(|i| {
+            let uri = i.uri.clone()?;
+            if let Some(rest) = uri.strip_prefix("spotify:start-group:") {
+                let (id, name) = rest.split_once(':').unwrap_or((rest, ""));
+                let name = urlencoding_decode(name);
+                Some(json!({ "type": "start", "id": id, "name": name }))
+            } else if let Some(id) = uri.strip_prefix("spotify:end-group:") {
+                Some(json!({ "type": "end", "id": id }))
+            } else {
+                Some(json!({ "type": "playlist", "uri": uri }))
+            }
+        })
+        .collect();
+    Ok(json!(items))
+}
+
+/// Mapnamen staan URL-gecodeerd in de lijst (met + voor spaties).
+fn urlencoding_decode(s: &str) -> String {
+    let bytes = s.replace('+', " ").into_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}

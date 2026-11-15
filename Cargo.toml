@@ -8,6 +8,7 @@ block2 = "0.6.2"
 dispatch2 = "0.3"
 futures = "0.3"
 cpal = "0.16"
+protobuf = "=3.7.2"
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"

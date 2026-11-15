@@ -223,6 +223,35 @@ fn handle(text: &str) {
             crate::settings::set("dsp", all);
         }
         "rebuild" => player::send(Cmd::Rebuild),
+        "saveFile" => {
+            // Opslaan via het gewone Mac-venster (bijv. een playlist als CSV).
+            let mtm = MainThreadMarker::new().unwrap();
+            let panel = objc2_app_kit::NSSavePanel::savePanel(mtm);
+            panel.setNameFieldStringValue(&NSString::from_str(msg["name"].as_str().unwrap_or("export.csv")));
+            if panel.runModal() == objc2_app_kit::NSModalResponseOK {
+                if let Some(path) = panel.URL().and_then(|u| u.path()) {
+                    let ok = std::fs::write(path.to_string(), msg["text"].as_str().unwrap_or("")).is_ok();
+                    send(json!({ "type": "toast", "text": if ok { "Opgeslagen" } else { "Opslaan lukte niet" } }));
+                }
+            }
+        }
+        "fetchText" => {
+            // Een pagina ophalen buiten de pagina om (geen CORS), bijv. de titel van een YouTube-link.
+            let id = msg["id"].clone();
+            let url = msg["url"].as_str().unwrap_or("").to_string();
+            std::thread::spawn(move || {
+                let got = reqwest::blocking::Client::new()
+                    .get(&url)
+                    .header("User-Agent", "Mozilla/5.0 Spotimfy")
+                    .timeout(std::time::Duration::from_secs(10))
+                    .send()
+                    .and_then(|r| r.text());
+                send(match got {
+                    Ok(text) => json!({ "type": "fetchText", "id": id, "text": text }),
+                    Err(e) => json!({ "type": "fetchText", "id": id, "error": e.to_string() }),
+                });
+            });
+        }
         "audioInfo" => {
             let id = msg["id"].clone();
             std::thread::spawn(move || {
@@ -440,6 +469,28 @@ define_class!(
     }
 
     unsafe impl WKUIDelegate for Host {
+        /// Een bestand kiezen (bijv. een hoes voor een playlist).
+        #[unsafe(method(webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:))]
+        fn open_panel(
+            &self,
+            _web: &WKWebView,
+            params: &objc2_web_kit::WKOpenPanelParameters,
+            _frame: &objc2_web_kit::WKFrameInfo,
+            done: &DynBlock<dyn Fn(*mut objc2_foundation::NSArray<NSURL>)>,
+        ) {
+            let mtm = MainThreadMarker::new().unwrap();
+            let panel = objc2_app_kit::NSOpenPanel::openPanel(mtm);
+            panel.setCanChooseFiles(true);
+            panel.setCanChooseDirectories(false);
+            panel.setAllowsMultipleSelection(unsafe { params.allowsMultipleSelection() });
+            if panel.runModal() == objc2_app_kit::NSModalResponseOK {
+                let urls = panel.URLs();
+                done.call((Retained::as_ptr(&urls) as *mut _,));
+            } else {
+                done.call((std::ptr::null_mut(),));
+            }
+        }
+
         #[unsafe(method(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
         fn create_web_view(
             &self,

@@ -48,7 +48,7 @@ function rpc(cmd, extra = {}) {
 window.spotimfy = {
   recv(m) {
     switch (m.type) {
-      case 'token': case 'lyrics': case 'meta': case 'audioInfo': {
+      case 'token': case 'lyrics': case 'meta': case 'audioInfo': case 'fetchText': {
         const w = waiting.get(m.id);
         if (!w) return;
         waiting.delete(m.id);
@@ -68,7 +68,14 @@ window.spotimfy = {
       case 'volume': S.volume = m.volume; return renderVolume();
       case 'shuffle': S.shuffle = m.on; return renderModes();
       case 'repeat': S.repeat = m.track ? 2 : m.context ? 1 : 0; return renderModes();
-      case 'unavailable': return toast('Dit nummer is hier niet beschikbaar');
+      case 'unavailable': {
+        const u = new Set(store.get('unavailable', []));
+        u.add(m.uri);
+        store.set('unavailable', [...u].slice(-2000));
+        lists.forEach(L => L.tracks.forEach(t => { if (t.uri === m.uri) t.playable = false; }));
+        lists.forEach(L => L.body?.isConnected && L.paint(true));
+        return toast('Dit nummer is niet beschikbaar en wordt overgeslagen');
+      }
       case 'remote': return onRemote(m.cmd, m.ms);
       case 'reconnected': return onReconnected();
       case 'island': store.set('island', m.on); return;
@@ -138,18 +145,18 @@ function token(fresh) {
 
 class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 
-async function api(path, { method = 'GET', body, retry = 2 } = {}) {
+async function api(path, { method = 'GET', body, retry = 2, raw, type } = {}) {
   const url = path.startsWith('http') ? path : 'https://api.spotify.com/v1' + path;
   const t = await token();
   const res = await fetch(url, {
     method,
-    headers: { Authorization: 'Bearer ' + t, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
+    headers: { Authorization: 'Bearer ' + t, ...(body ? { 'Content-Type': 'application/json' } : raw ? { 'Content-Type': type } : {}) },
+    body: body ? JSON.stringify(body) : raw,
   });
-  if (res.status === 401 && retry > 0) { tok = null; await token(true); return api(path, { method, body, retry: retry - 1 }); }
+  if (res.status === 401 && retry > 0) { tok = null; await token(true); return api(path, { method, body, raw, type, retry: retry - 1 }); }
   if (res.status === 429 && retry > 0) {
     await sleep(Math.min(10, +res.headers.get('Retry-After') || 1) * 1000);
-    return api(path, { method, body, retry: retry - 1 });
+    return api(path, { method, body, raw, type, retry: retry - 1 });
   }
   if (res.status === 204 || res.status === 202) return null;
   const text = await res.text();
@@ -186,7 +193,7 @@ async function pages(path, each, max = 10000) {
 
 /** Een playlist-pagina: eerst het nieuwe /items, anders het oude /tracks. */
 async function playlistItems(id, each) {
-  try { return await pages(`/playlists/${id}/items?limit=50`, each); }
+  try { return await pages(`/playlists/${id}/items?limit=50&market=from_token`, each); }
   catch (e) { if (e.status === 404 || e.status === 403 || e.status === 400) return pages(`/playlists/${id}/tracks?limit=50`, each); throw e; }
 }
 
@@ -260,7 +267,7 @@ document.addEventListener('mouseover', e => {
   }, 120);
 });
 
-const withAdded = (t, x) => t && (x?.added_at ? { ...t, added: Date.parse(x.added_at) } : t);
+const withAdded = (t, x) => t && { ...t, ...(x?.added_at ? { added: Date.parse(x.added_at) } : {}), ...(x?.added_by?.id ? { by: x.added_by.id } : {}) };
 
 // ——— afspelen ———
 /** Afspelen via de kern. Komt er binnen 6 s niets op gang, dan de verbinding nakijken en het nog één keer proberen. */
@@ -618,7 +625,11 @@ function go(where, arg, push = true) {
 function back() { if (!hist.length) return; cur.scroll = $('#view').scrollTop; ahead.push(cur); cur = hist.pop(); show(cur); }
 function forward() { if (!ahead.length) return; cur.scroll = $('#view').scrollTop; hist.push(cur); cur = ahead.pop(); show(cur); }
 $('#back').onclick = back;
-$('#side-new').onclick = () => newPlaylist();
+$('#side-new').onclick = e => menuAt(e.currentTarget, [
+  { label: 'Nieuwe playlist…', fn: () => newPlaylist() },
+  { label: 'Nieuwe map…', fn: async () => { const name = await ask('Nieuwe map', 'Naam'); if (!name) return; store.set('folders', [...store.get('folders', []), { id: 'f' + Date.now(), name, items: [] }]); renderSide(); } },
+  { label: 'Importeren…', fn: () => importPlaylist() },
+]);
 $('#fwd').onclick = forward;
 
 let renderId = 0;
@@ -653,9 +664,11 @@ $('#view').addEventListener('scroll', () => {
 // ——— lijsten met nummers ———
 let lists = new Map(), listSeq = 0;
 /** Een nummerlijst. ctx = { uri } (afspelen in die context) of null (als losse lijst). */
-function trackList(el, tracks, { ctx, album = true, numbers = false, cover = true } = {}) {
+function trackList(el, tracks, { ctx, album = true, numbers = false, cover = true, reorder = null } = {}) {
   const key = 'l' + (++listSeq);
-  const L = { tracks, shown: tracks, ctx, key, sort: null, q: '' };
+  const gone = new Set(store.get('unavailable', []));
+  if (gone.size) tracks.forEach(t => { if (gone.has(t.uri)) t.playable = false; });
+  const L = { tracks, shown: tracks, ctx, key, sort: null, q: '', reorder };
   lists.set(key, L);
   el.classList.add('tracks');
   if (!album) el.classList.add('no-album');
@@ -667,7 +680,7 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
   const row = (t, i) => `<div class="tr${t.playable === false ? ' unplayable' : ''}${L.sel === i ? ' sel' : ''}" data-i="${i}" data-uri="${esc(t.uri)}" draggable="true" style="top:${i * ROW}px">
     <div class="n"><span>${numbers && t.number ? t.number : i + 1}</span><i class="eq"><b></b><b></b><b></b></i></div>
     <div class="main">${cover ? img(t.album.images, 64) : ''}<div><div class="t">${t.explicit ? '<span class="E">E</span>' : ''}${esc(t.name)}</div>
-    <div class="a">${t.artists.map(a => a.id ? `<a data-go="artist:${esc(a.id)}">${esc(a.name)}</a>` : esc(a.name)).join(', ')}</div></div></div>
+    <div class="a">${t.artists.map(a => a.id ? `<a data-go="artist:${esc(a.id)}">${esc(a.name)}</a>` : esc(a.name)).join(', ')}${L.multiBy && t.by ? ` · <span class="by">${esc(userName(t.by))}</span>` : ''}</div></div></div>
     <div class="al">${t.album.id ? `<a data-go="album:${esc(t.album.id)}">${esc(t.album.name)}</a>` : esc(t.album.name)}</div>
     ${added() ? `<div class="ad">${t.added ? day(t.added) : ''}</div>` : ''}
     <button class="icon like${S.liked.get(t.uri) ? ' on' : ''}" data-like>${icon(S.liked.get(t.uri) ? 'heart-on' : 'heart')}</button>
@@ -675,6 +688,9 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
   // Alleen de rijen die je ziet bestaan echt: ook 10.000 nummers blijven soepel.
   L.render = () => {
     el.classList.toggle('with-added', added());
+    // Gedeelde playlist: laten zien wie wat toevoegde.
+    L.multiBy = new Set(L.tracks.map(t => t.by).filter(Boolean)).size > 1;
+    if (L.multiBy) [...new Set(L.tracks.map(t => t.by))].forEach(id => id && !users.has(id) && users.set(id, soft(get(`/users/${id}`, 864e5)).then(u => { users.set(id, u?.display_name || id); L.paint(true); })));
     el.innerHTML = head() + `<div class="vbody" style="height:${L.shown.length * ROW}px"></div>`;
     L.body = $('.vbody', el);
     L.painted = null;
@@ -716,6 +732,44 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
   return L;
 }
 const ROW = 54;
+const users = new Map();
+const userName = id => { const u = users.get(id); return typeof u === 'string' ? u : id === S.me?.id ? 'jij' : '…'; };
+
+// Herschikken in je eigen playlist: een rij naar een andere plek slepen.
+let rowDrag = null;
+document.addEventListener('dragstart', e => {
+  const row = e.target.closest?.('.tr[data-i]');
+  const L = row && lists.get(row.closest('[data-list]').dataset.list);
+  rowDrag = L?.reorder && !L.sort && !L.q ? { L, i: +row.dataset.i } : null;
+});
+$('#view').addEventListener('dragover', e => {
+  if (!rowDrag) return;
+  const row = e.target.closest('.tr[data-i]');
+  if (!row || lists.get(row.closest('[data-list]')?.dataset.list) !== rowDrag.L) return;
+  e.preventDefault();
+  $$('.tr.drop-above').forEach(r => r !== row && r.classList.remove('drop-above'));
+  row.classList.add('drop-above');
+});
+$('#view').addEventListener('drop', async e => {
+  if (!rowDrag) return;
+  const row = e.target.closest('.tr[data-i]');
+  const { L, i: from } = rowDrag;
+  rowDrag = null;
+  $$('.tr.drop-above').forEach(r => r.classList.remove('drop-above'));
+  if (!row) return;
+  e.preventDefault();
+  const to = +row.dataset.i;
+  if (to === from || to === from + 1) return;
+  const p = L.reorder;
+  const [t] = L.tracks.splice(from, 1);
+  L.tracks.splice(to > from ? to - 1 : to, 0, t);
+  L.filter();
+  try {
+    await api(`/playlists/${p.id}/items`, { method: 'PUT', body: { range_start: from, insert_before: to } })
+      .catch(e => e.status === 404 || e.status === 403 ? api(`/playlists/${p.id}/tracks`, { method: 'PUT', body: { range_start: from, insert_before: to } }) : Promise.reject(e));
+    forget(p.id);
+  } catch (err) { toast(err.message); }
+});
 // Bij scrollen en groter/kleiner maken: de zichtbare rijen bijwerken.
 const paintLists = () => requestAnimationFrame(() => lists.forEach(L => L.body?.isConnected && L.paint()));
 $('#view').addEventListener('scroll', paintLists, { passive: true });
@@ -821,6 +875,10 @@ function updateBigPlay(b) {
 
 // rechtsklikmenu
 document.addEventListener('contextmenu', e => {
+  const side = e.target.closest('[data-side]');
+  if (side) { e.preventDefault(); return sideMenu(e.clientX, e.clientY, side.dataset.side); }
+  const fold = e.target.closest('[data-fold]');
+  if (fold && !fold.dataset.fold.startsWith('sp:')) { e.preventDefault(); return folderHeadMenu(e.clientX, e.clientY, fold.dataset.fold); }
   const row = e.target.closest('.tr[data-i], .q[data-uri], .pi[data-uri]');
   const card = e.target.closest('[data-card]');
   if (!row && !card) return;
@@ -873,9 +931,10 @@ function trackMenu(x, y, t, playFn, L) {
 // zet steeds precies één nummer klaar bij Spotify; de rest kun je slepen, weghalen en bewaren.
 // Jouw nummers gaan altijd voor wat de mix automatisch aanvult.
 const Q = {
-  items: store.get('queue', []),
+  // Wat bij een herstart nog klaarstond, gaat gewoon weer vooraan.
+  items: [...(store.get('queueReady', null) ? [store.get('queueReady')] : []), ...store.get('queue', [])],
   ready: null, // het nummer dat al bij Spotify klaarstaat
-  save() { store.set('queue', this.items); if (S.panel === 'queue') renderQueue(); },
+  save() { store.set('queue', this.items); store.set('queueReady', this.ready); if (S.panel === 'queue') renderQueue(); },
 };
 const slimT = t => ({ uri: t.uri, id: t.id, name: t.name, artists: t.artists.map(a => ({ name: a.name, id: a.id })), album: { name: t.album?.name || '', id: t.album?.id, images: t.album?.images?.slice(0, 1) || [] }, duration: t.duration });
 
@@ -960,6 +1019,163 @@ async function removeFromPlaylist(p, t, L) {
   } catch (e) { toast(e.message); }
 }
 
+// ——— playlists beheren ———
+async function playlistTracks(p) {
+  if (p.owner?.id === S.me?.id) {
+    try { return (await playlistItems(p.id)).map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean); } catch {}
+  }
+  return corePlaylist(p.id);
+}
+const forget = id => { memo.forEach((v, k) => k.includes(id) && memo.delete(k)); coreLists.delete(id); try { localStorage.removeItem('spotimfy:pl:' + id); } catch {} };
+
+/** Naam, beschrijving en hoes. */
+async function editPlaylist(p) {
+  const r = await askForm('Playlist bewerken', [
+    { key: 'name', label: 'Naam', value: p.name },
+    { key: 'description', label: 'Beschrijving', value: (p.description || '').replace(/<[^>]+>/g, ''), area: true },
+    { key: 'cover', label: 'Hoes (JPEG of PNG)', file: true },
+  ]);
+  if (!r) return;
+  try {
+    await api(`/playlists/${p.id}`, { method: 'PUT', body: { name: r.name || p.name, description: r.description } });
+    if (r.cover) await api(`/playlists/${p.id}/images`, { method: 'PUT', raw: await coverJpeg(r.cover), type: 'image/jpeg' });
+    forget(p.id);
+    renderSide(await myPlaylists(true));
+    toast('Opgeslagen');
+    if (cur.where === 'playlist' && cur.arg === p.id) show(cur);
+  } catch (e) { toast(e.message); }
+}
+
+/** Een gekozen afbeelding vierkant, maximaal 640 px en klein genoeg (onder 256 kB) als JPEG in base64. */
+function coverJpeg(file) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => {
+      const size = Math.min(640, im.width, im.height);
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const s = Math.min(im.width, im.height);
+      c.getContext('2d').drawImage(im, (im.width - s) / 2, (im.height - s) / 2, s, s, 0, 0, size, size);
+      let q = 0.9, data;
+      do { data = c.toDataURL('image/jpeg', q).split(',')[1]; q -= 0.1; } while (data.length > 250000 && q > 0.2);
+      resolve(data);
+    };
+    im.onerror = reject;
+    im.src = URL.createObjectURL(file);
+  });
+}
+
+async function removePlaylist(p) {
+  const own = p.owner?.id === S.me?.id;
+  if (!(await confirmBox(own ? `“${p.name}” verwijderen?` : `“${p.name}” niet meer volgen?`, own ? 'Spotify bewaart verwijderde playlists nog even; je kunt hem op spotify.com herstellen.' : ''))) return;
+  try {
+    await api('/me/library?uris=' + p.uri, { method: 'DELETE' }).catch(() => api(`/playlists/${p.id}/followers`, { method: 'DELETE' }));
+    store.set('pins', store.get('pins', []).filter(u => u !== p.uri));
+    renderSide(await myPlaylists(true));
+    toast(own ? 'Verwijderd' : 'Niet meer gevolgd');
+    if (cur.where === 'playlist' && cur.arg === p.id) go('library');
+  } catch (e) { toast(e.message); }
+}
+
+/** Dubbele nummers (ook andere versies van hetzelfde nummer) eruit halen. */
+async function dedupePlaylist(p) {
+  if (p.owner?.id !== S.me?.id) return toast('Alleen bij je eigen playlists');
+  toast('Zoeken naar dubbele nummers…');
+  const tracks = await playlistTracks(p);
+  const seen = new Set(), dupes = [];
+  tracks.forEach((t, i) => { const k = songKey(t); if (seen.has(k)) dupes.push({ uri: t.uri, positions: [i] }); else seen.add(k); });
+  if (!dupes.length) return toast('Geen dubbele nummers gevonden');
+  if (!(await confirmBox(`${dupes.length} dubbele nummers gevonden`, 'De eerste keer blijft staan; de herhalingen gaan eruit.'))) return;
+  try {
+    for (let i = 0; i < dupes.length; i += 100) await api(`/playlists/${p.id}/items`, { method: 'DELETE', body: { items: dupes.slice(i, i + 100) } }).catch(e => api(`/playlists/${p.id}/tracks`, { method: 'DELETE', body: { tracks: dupes.slice(i, i + 100) } }));
+    forget(p.id);
+    toast(`${dupes.length} dubbele nummers verwijderd`);
+    if (cur.where === 'playlist' && cur.arg === p.id) show(cur);
+  } catch (e) { toast(e.message); }
+}
+
+/** Twee playlists samenvoegen tot een nieuwe (zonder dubbelen). */
+function mergeMenu(x, y, p) {
+  const others = (myPlaylists.list || []).filter(q => q.uri !== p.uri);
+  menu(x, y, [{ label: `“${p.name}” samenvoegen met`, header: true }, ...others.slice(0, 40).map(q => ({ label: q.name, fn: async () => {
+    toast('Samenvoegen…');
+    const [a, b] = await Promise.all([playlistTracks(p), playlistTracks(q)]);
+    const seen = new Set(), uris = [];
+    for (const t of [...a, ...b]) { const k = songKey(t); if (!seen.has(k)) { seen.add(k); uris.push(t.uri); } }
+    const made = await newPlaylist([], `${p.name} + ${q.name}`, { quiet: true });
+    if (!made) return;
+    for (let i = 0; i < uris.length; i += 100) await addToPlaylist(made, uris.slice(i, i + 100));
+    toast(`Samengevoegd: ${uris.length} nummers`);
+    go('playlist', made.id);
+  } }))]);
+}
+
+/** Playlist als CSV (Excel en Numbers openen dat). */
+async function exportPlaylist(p) {
+  const tracks = p.tracks || await playlistTracks(p);
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const csv = ['Titel;Artiest;Album;Duur;Toegevoegd;Spotify-link', ...tracks.map(t => [t.name, t.artists.map(a => a.name).join(', '), t.album.name, fmt(t.duration), t.added ? new Date(t.added).toLocaleDateString('nl-NL') : '', 'https://open.spotify.com/track/' + idOf(t.uri)].map(q).join(';'))].join('\n');
+  post('saveFile', { name: `${p.name.replace(/[\/:]/g, '-')}.csv`, text: '\ufeff' + csv });
+}
+
+/** Importeren: een lijst "artiest - titel" (of Spotify- en YouTube-links), één per regel. */
+async function importPlaylist() {
+  const r = await askForm('Playlist importeren', [
+    { key: 'name', label: 'Naam van de nieuwe playlist', value: 'Geïmporteerd ' + new Date().toLocaleDateString('nl-NL') },
+    { key: 'list', label: 'Eén nummer per regel: “artiest - titel”, of een Spotify- of YouTube-link', area: true, rows: 10 },
+  ]);
+  if (!r?.list?.trim()) return;
+  const lines = r.list.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 500);
+  const uris = [], missed = [];
+  for (const [i, line] of lines.entries()) {
+    toast(`Importeren… ${i + 1}/${lines.length}`);
+    const sp = line.match(/open\.spotify\.com\/track\/([A-Za-z0-9]{22})/) || line.match(/spotify:track:([A-Za-z0-9]{22})/);
+    if (sp) { uris.push('spotify:track:' + sp[1]); continue; }
+    let query = line;
+    if (/youtu\.?be/.test(line)) {
+      // De titel van de video opvragen en die zoeken.
+      const got = await rpc('fetchText', { url: 'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent(line) }).catch(() => null);
+      try { query = JSON.parse(got.text).title.replace(/\(.*?(official|video|audio|lyrics|clip).*?\)|\[.*?\]/gi, ''); } catch { missed.push(line); continue; }
+    }
+    const hit = await soft(get(`/search?q=${encodeURIComponent(query.replace(/[-–—]/g, ' '))}&type=track&limit=1`, 3600000));
+    const t = hit?.tracks?.items?.[0];
+    t ? uris.push(t.uri) : missed.push(line);
+  }
+  if (!uris.length) return toast('Niets gevonden om te importeren');
+  const made = await newPlaylist([], r.name, { quiet: true, noAsk: true });
+  if (!made) return;
+  for (let i = 0; i < uris.length; i += 100) await addToPlaylist(made, uris.slice(i, i + 100));
+  toast(`${uris.length} nummers geïmporteerd${missed.length ? `, ${missed.length} niet gevonden` : ''}`);
+  go('playlist', made.id);
+}
+
+/** Een venstertje met meerdere velden. */
+function askForm(title, fields) {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.id = 'ask';
+    box.innerHTML = `<form class="ask-box wide"><h3>${esc(title)}</h3>${fields.map(f => `<label class="ask-f"><span>${esc(f.label)}</span>${f.file ? `<input type="file" accept="image/jpeg,image/png" data-k="${f.key}">` : f.area ? `<textarea data-k="${f.key}" rows="${f.rows || 3}" spellcheck="false">${esc(f.value || '')}</textarea>` : `<input data-k="${f.key}" value="${esc(f.value || '')}" spellcheck="false">`}</label>`).join('')}
+      <div class="ask-btns"><button type="button" class="ghost">Annuleer</button><button class="primary">OK</button></div></form>`;
+    document.body.append(box);
+    $('[data-k]', box).focus();
+    const done = v => { box.remove(); resolve(v); };
+    $('form', box).onsubmit = e => { e.preventDefault(); const out = {}; $$('[data-k]', box).forEach(x => out[x.dataset.k] = x.type === 'file' ? x.files[0] : x.value.trim()); done(out); };
+    $('.ghost', box).onclick = () => done(null);
+    box.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } });
+  });
+}
+function confirmBox(title, text = '') {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.id = 'ask';
+    box.innerHTML = `<div class="ask-box"><h3>${esc(title)}</h3>${text ? `<p class="sub">${esc(text)}</p>` : ''}<div class="ask-btns"><button class="ghost">Annuleer</button><button class="primary">Doorgaan</button></div></div>`;
+    document.body.append(box);
+    $('.primary', box).focus();
+    $('.ghost', box).onclick = () => { box.remove(); resolve(false); };
+    $('.primary', box).onclick = () => { box.remove(); resolve(true); };
+  });
+}
+
 /** Een klein venstertje met één tekstveld (prompt() werkt niet in de app). */
 function ask(title, placeholder = '', value = '') {
   return new Promise(resolve => {
@@ -976,8 +1192,8 @@ function ask(title, placeholder = '', value = '') {
     input.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
   });
 }
-async function newPlaylist(uris = [], suggest = '', { quiet } = {}) {
-  const name = await ask('Nieuwe playlist', 'Naam', suggest);
+async function newPlaylist(uris = [], suggest = '', { quiet, noAsk } = {}) {
+  const name = noAsk ? suggest : await ask('Nieuwe playlist', 'Naam', suggest);
   if (!name) return null;
   try {
     const p = await api('/me/playlists', { method: 'POST', body: { name, public: false } })
@@ -1030,10 +1246,91 @@ async function myPlaylists(fresh) {
   store.set('playlists', myPlaylists.list.map(p => ({ id: p.id, uri: p.uri, name: p.name, images: (p.images || []).slice(-1), owner: { id: p.owner?.id, display_name: p.owner?.display_name }, collaborative: p.collaborative })));
   return myPlaylists.list;
 }
+/** De zijbalk: vastgezet, mappen (van Spotify en van Spotimfy), dan de rest in de volgorde van je bibliotheek. */
 function renderSide(list) {
+  list = list || myPlaylists.list || store.get('playlists', []);
+  const byUri = new Map(list.map(p => [p.uri, p]));
+  const order = store.get('rootlist', null);
+  // Volgorde en Spotify-mappen uit de rootlist (als die er is).
+  const spotifyFolders = [], ordered = [];
+  if (order) {
+    let folder = null;
+    for (const it of order) {
+      if (it.type === 'start') { folder = { id: 'sp:' + it.id, name: it.name, items: [], spotify: true }; spotifyFolders.push(folder); }
+      else if (it.type === 'end') folder = null;
+      else if (byUri.has(it.uri)) (folder ? folder.items : ordered).push(it.uri);
+    }
+    for (const p of list) if (!order.some(o => o.uri === p.uri)) ordered.unshift(p.uri);
+  } else ordered.push(...list.map(p => p.uri));
+  const pins = store.get('pins', []).filter(u => byUri.has(u));
+  const folders = [...spotifyFolders, ...store.get('folders', [])];
+  const inFolder = new Set(folders.flatMap(f => f.items));
+  const open = store.get('openFolders', {});
+  const btn = p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" data-side="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64, '', p.name)}<span>${esc(p.name)}</span>${pins.includes(p.uri) ? '<i class="pin">•</i>' : ''}</button>`;
   $('#side-lists').innerHTML =
     `<button data-go="liked:" data-card="spotify:user:${esc(S.user)}:collection"><div class="ph liked-ph">${icon('heart-on')}</div><span>Nummers die je leuk vindt</span></button>` +
-    list.map(p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64, '', p.name)}<span>${esc(p.name)}</span></button>`).join('');
+    pins.map(u => btn(byUri.get(u))).join('') +
+    folders.map(f => `<div class="folder${open[f.id] ? ' open' : ''}" data-folder="${esc(f.id)}"><button class="folder-head" data-fold="${esc(f.id)}"><div class="ph folder-ph">${icon('folder')}</div><span>${esc(f.name)}</span><i class="chev">${icon('right')}</i></button>
+      <div class="folder-items">${f.items.filter(u => byUri.has(u) && !pins.includes(u)).map(u => btn(byUri.get(u))).join('') || '<div class="folder-empty">Sleep playlists hierheen</div>'}</div></div>`).join('') +
+    ordered.filter(u => !pins.includes(u) && !inFolder.has(u)).map(u => btn(byUri.get(u))).join('');
+  markNow();
+}
+$('#side-lists').addEventListener('click', e => {
+  const f = e.target.closest('[data-fold]');
+  if (!f) return;
+  e.stopPropagation();
+  const open = store.get('openFolders', {});
+  open[f.dataset.fold] = !open[f.dataset.fold];
+  store.set('openFolders', open);
+  f.parentElement.classList.toggle('open', open[f.dataset.fold]);
+}, true);
+
+/** Rootlist (volgorde + mappen) op de achtergrond verversen. */
+async function refreshRootlist() {
+  const r = await soft(rpc('meta', { kind: 'rootlist', arg: '' }));
+  if (r?.data) { store.set('rootlist', r.data); renderSide(); }
+}
+
+/** Rechtsklik op een playlist in de zijbalk. */
+function sideMenu(x, y, uri) {
+  const p = (myPlaylists.list || []).find(q => q.uri === uri);
+  if (!p) return;
+  const own = p.owner?.id === S.me?.id;
+  const pins = store.get('pins', []);
+  const folders = store.get('folders', []);
+  const inF = folders.find(f => f.items.includes(uri));
+  menu(x, y, [
+    { label: 'Afspelen', fn: () => playUri(uri) },
+    { label: 'Slim shuffelen', fn: () => smartShuffle(uri) },
+    { label: 'In de wachtrij', fn: () => queueContext(uri) },
+    '-',
+    { label: pins.includes(uri) ? 'Losmaken' : 'Vastzetten bovenaan', fn: () => { store.set('pins', pins.includes(uri) ? pins.filter(u => u !== uri) : [uri, ...pins]); renderSide(); } },
+    { label: 'Naar map…', fn: () => folderMenu(x, y, uri) },
+    ...(inF ? [{ label: `Uit map “${inF.name}”`, fn: () => { inF.items = inF.items.filter(u => u !== uri); store.set('folders', folders); renderSide(); } }] : []),
+    '-',
+    ...(own ? [{ label: 'Bewerken…', fn: () => editPlaylist(p) }] : []),
+    { label: 'Duplicaten opruimen', fn: () => dedupePlaylist(p) },
+    { label: 'Samenvoegen met…', fn: () => mergeMenu(x, y, p) },
+    { label: 'Exporteren (CSV)', fn: () => exportPlaylist(p) },
+    { label: 'Kopieer link', fn: () => copyLink(uri) },
+    '-',
+    { label: own ? 'Verwijderen…' : 'Niet meer volgen', fn: () => removePlaylist(p) },
+  ]);
+}
+function folderMenu(x, y, uri) {
+  const folders = store.get('folders', []);
+  menu(x, y, [{ label: 'Naar map', header: true },
+    ...folders.map(f => ({ label: f.name, fn: () => { folders.forEach(g => g.items = g.items.filter(u => u !== uri)); f.items.push(uri); store.set('folders', folders); renderSide(); } })),
+    '-', { label: 'Nieuwe map…', fn: async () => { const name = await ask('Nieuwe map', 'Naam'); if (!name) return; folders.forEach(g => g.items = g.items.filter(u => u !== uri)); folders.push({ id: 'f' + Date.now(), name, items: [uri] }); store.set('folders', folders); renderSide(); } }]);
+}
+function folderHeadMenu(x, y, id) {
+  const folders = store.get('folders', []);
+  const f = folders.find(g => g.id === id);
+  if (!f) return;
+  menu(x, y, [
+    { label: 'Hernoemen…', fn: async () => { const n = await ask('Map hernoemen', 'Naam', f.name); if (n) { f.name = n; store.set('folders', folders); renderSide(); } } },
+    { label: 'Map weghalen (playlists blijven)', fn: () => { store.set('folders', folders.filter(g => g !== f)); renderSide(); } },
+  ]);
 }
 
 let dragged = null;
@@ -1053,7 +1350,13 @@ document.addEventListener('dragstart', e => {
   document.body.classList.add('dragging');
 });
 document.addEventListener('dragend', () => { dragged = null; document.body.classList.remove('dragging'); $$('.drop').forEach(b => b.classList.remove('drop')); });
+$('#side-lists').addEventListener('dragstart', e => {
+  const b = e.target.closest?.('[data-side]');
+  if (b) { sideDrag = b.dataset.side; e.dataTransfer.setData('text/plain', sideDrag); }
+});
 $('#side-lists').addEventListener('dragover', e => {
+  const f = e.target.closest('.folder');
+  if (sideDrag && f) { e.preventDefault(); $$('.drop').forEach(x => x.classList.remove('drop')); f.classList.add('drop'); return; }
   const b = e.target.closest('button');
   if (!dragged || !b || !canDrop(b)) return;
   e.preventDefault();
@@ -1061,7 +1364,18 @@ $('#side-lists').addEventListener('dragover', e => {
   b.classList.add('drop');
 });
 $('#side-lists').addEventListener('dragleave', e => e.target.closest('button')?.classList.remove('drop'));
+let sideDrag = null;
+$('#side-lists').addEventListener('dragend', () => { sideDrag = null; $$('.drop').forEach(x => x.classList.remove('drop')); });
 $('#side-lists').addEventListener('drop', async e => {
+  const f = e.target.closest('.folder');
+  if (sideDrag && f) {
+    e.preventDefault();
+    const folders = store.get('folders', []);
+    const target = folders.find(g => g.id === f.dataset.folder);
+    if (target) { folders.forEach(g => g.items = g.items.filter(u => u !== sideDrag)); target.items.push(sideDrag); store.set('folders', folders); renderSide(); }
+    sideDrag = null;
+    return;
+  }
   const b = e.target.closest('button');
   if (!dragged || !b) return;
   e.preventDefault();
@@ -1076,6 +1390,62 @@ function canDrop(b) {
   const p = (myPlaylists.list || []).find(x => x.uri === b.dataset.card);
   return p && (p.owner?.id === S.me?.id || p.collaborative);
 }
+
+// ——— gemaakt voor jou (door Spotimfy) ———
+// Spotify geeft zijn eigen Daily Mixes niet meer aan nieuwe apps; deze maakt Spotimfy zelf.
+const weekNo = () => Math.floor((Date.now() / 864e5 + 3) / 7);
+const MADE = {
+  async daily() {
+    // Je top-artiesten in groepjes van drie: elk groepje een Dagmix.
+    const top = await soft(get('/me/top/artists?time_range=medium_term&limit=10', 864e5));
+    const artists = top?.items || [];
+    const groups = [0, 1, 2, 3].map(g => artists.filter((_, i) => i % 4 === g).slice(0, 3)).filter(g => g.length);
+    return groups.map((g, i) => ({ key: 'daily' + i, name: `Dagmix ${i + 1}`, sub: g.map(a => a.name).join(', '), images: g[0]?.images, seeds: g }));
+  },
+  async build(key) {
+    const day = new Date().toISOString().slice(0, 10);
+    const cached = store.get('made:' + key, null);
+    const fresh = key === 'weekly' ? cached?.week === weekNo() : cached?.day === day;
+    if (cached && fresh) return cached.tracks;
+    let tracks = [];
+    if (key.startsWith('daily')) {
+      const d = (await MADE.daily())[+key.slice(5)];
+      if (!d) return [];
+      const seedTracks = (await Promise.all(d.seeds.map(a => rpc('meta', { kind: 'artistTop', arg: a.id }).then(r => r.data.slice(0, 2), () => [])))).flat();
+      // Bekend en nieuw door elkaar: een paar van je favorieten, de rest erbij passend.
+      const mix = await mixFor(seedTracks, { count: 40 });
+      tracks = [];
+      mix.forEach((t, i) => { tracks.push(t); if (i % 4 === 1 && seedTracks.length) tracks.push(seedTracks.shift()); });
+    } else if (key === 'weekly') {
+      const top = await soft(get('/me/top/tracks?time_range=short_term&limit=20', 864e5));
+      const seeds = (top?.items || []).map(t => norm(t)).sort(() => Math.random() - 0.5).slice(0, 3);
+      const old = store.get('mixBalance', 0.5);
+      store.set('mixBalance', 1);
+      const liked = new Set((plCache.get('liked') || []).map(songKey));
+      const heard = new Set(store.get('hist', []).map(h => songKey({ name: h.name, artists: [{ name: h.artists[0] }] })));
+      tracks = (await mixFor(seeds, { count: 60 })).filter(t => !liked.has(songKey(t)) && !heard.has(songKey(t))).slice(0, 30);
+      store.set('mixBalance', old);
+    } else if (key === 'radar') {
+      // Nieuwe albums en singles (laatste 4 weken) van artiesten die je volgt of veel hoort.
+      const [follow, top] = await Promise.all([soft(pages('/me/following?type=artist&limit=50', null, 100)), soft(get('/me/top/artists?time_range=short_term&limit=10', 864e5))]);
+      const artists = [...new Map([...(follow || []), ...(top?.items || [])].map(a => [a.id, a])).values()].slice(0, 40);
+      const since = new Date(Date.now() - 28 * 864e5).toISOString().slice(0, 10);
+      const albums = (await Promise.all(artists.map(a => soft(get(`/artists/${a.id}/albums?include_groups=album,single&limit=5`, 864e5)).then(r => r?.items || [])))).flat().filter(al => (al.release_date || '') >= since);
+      albums.sort((a, b) => b.release_date.localeCompare(a.release_date));
+      for (const al of albums.slice(0, 15)) {
+        const full = await soft(get(`/albums/${al.id}`, 864e5));
+        tracks.push(...(full?.tracks?.items || []).slice(0, al.album_type === 'single' ? 3 : 2).map(t => norm(t, { name: full.name, id: full.id, images: full.images })));
+      }
+    }
+    store.set('made:' + key, { day, week: weekNo(), tracks: tracks.map(slimT) });
+    return tracks;
+  },
+};
+const SMART = {
+  'deze-maand': ['Deze maand leuk gevonden', 'Wat je de afgelopen 30 dagen liked', ts => ts.filter(t => t.added && Date.now() - t.added < 30 * 864e5)],
+  'nooit-gespeeld': ['Leuk, maar nooit gespeeld', 'Liked songs die je in Spotimfy nog niet hoorde', ts => { const h = new Set(store.get('hist', []).map(x => x.uri)); return ts.filter(t => !h.has(t.uri)); }],
+  'pareltjes': ['Vergeten pareltjes', 'Meer dan een jaar geleden liked', ts => ts.filter(t => t.added && Date.now() - t.added > 365 * 864e5).sort(() => Math.random() - 0.5).slice(0, 100)],
+};
 
 // ——— de pagina's ———
 const card = (o, round) => `<div class="card${round ? ' round' : ''}" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">
@@ -1092,12 +1462,37 @@ function greeting() {
 }
 
 const views = {
+  async made(el, key, alive) {
+    const daily = key.startsWith('daily') ? (await MADE.daily())[+key.slice(5)] : null;
+    const title = daily?.name || { weekly: 'Ontdek wekelijks', radar: 'Releaseradar' }[key] || 'Mix';
+    const sub = daily ? `Met ${daily.sub} en meer` : key === 'weekly' ? 'Nummers die je nog nooit hoorde, gekozen op jouw smaak. Elke week nieuw.' : 'Nieuwe albums en singles van artiesten die je volgt of veel hoort.';
+    el.innerHTML = `<div class="hero"><div class="cover made-cover big" style="--h:${daily ? (key.slice(5) * 70 + 200) % 360 : key === 'weekly' ? 80 : 140}"><span>${esc(title)}</span></div><div><div class="kind">Gemaakt voor jou door Spotimfy</div><h1>${esc(title)}</h1><div class="desc">${esc(sub)}</div></div></div>
+      <div class="actions"><button class="big-play" id="m-play">${icon('play')}</button><button class="pill" id="m-save">Bewaar als playlist</button><button class="pill" id="m-new">Vernieuwen</button></div><div id="m-list"><div class="loading-more">Wordt gemaakt…</div></div>`;
+    $('#top-title').textContent = title;
+    const tracks = await MADE.build(key);
+    if (!alive()) return;
+    $('#m-list', el).innerHTML = '';
+    const L = trackList($('#m-list', el), tracks);
+    $('#m-play', el).onclick = () => { S.ctx = null; S.mix = { list: tracks.map(slimT), label: title }; store.set('mix', S.mix); play({ tracks: tracks.map(t => t.uri) }); };
+    $('#m-save', el).onclick = () => newPlaylist(tracks.map(t => t.uri), title + ' · ' + new Date().toLocaleDateString('nl-NL'));
+    $('#m-new', el).onclick = () => { localStorage.removeItem('spotimfy:made:' + key); show(cur); };
+    return L;
+  },
+
+  async smart(el, key, alive) {
+    const [title, sub, pick] = SMART[key] || [];
+    if (!pick) return;
+    const L = await collection(el, { kind: 'Slimme playlist', title, desc: sub, liked: true, uri: null }, alive);
+    const tracks = pick(plCache.get('liked') || (await pages('/me/tracks?limit=50', null, 3000)).map(x => withAdded(norm(x.track), x)).filter(Boolean));
+    if (alive()) L.set(tracks);
+  },
+
   async home(el, _, alive) {
     const name = S.me?.display_name?.split(' ')[0];
     el.innerHTML = `<h1 class="page">${greeting()}${name ? ', ' + esc(name) : ''}</h1>
       <div class="actions" style="padding-top:0;margin:-8px 0 14px"><button class="pill" id="h-random">${icon('disc')} Willekeurig album</button><button class="pill" id="h-mix">${icon('shuffle')} Mix van mijn favorieten</button></div>
       <div class="quick" id="h-quick"></div>
-      <section id="h-recent"></section><section id="h-top"></section><section id="h-lists"></section><section id="h-albums"></section>`;
+      <section id="h-made"></section><section id="h-recent"></section><section id="h-top"></section><section id="h-lists"></section><section id="h-albums"></section>`;
     $('#top-title').textContent = 'Home';
     $('#h-random', el).onclick = randomAlbum;
     $('#h-mix', el).onclick = async () => {
@@ -1116,6 +1511,14 @@ const views = {
     const tiles = list => { $('#h-quick', el).innerHTML = list.slice(0, 8).map(o => `<div class="tile" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">${o.go === 'liked:' ? `<div class="ph liked-ph">${icon('heart-on')}</div>` : img(o.images, 64, '', o.name)}<span>${esc(o.name)}</span><button class="play" data-play="${esc(o.uri)}">${icon('play')}</button></div>`).join(''); };
     const fromLists = playlists.slice(0, 8).map(p => ({ go: 'playlist:' + p.id, uri: p.uri, images: p.images, name: p.name }));
     tiles([{ go: 'liked:', uri: `spotify:user:${S.user}:collection`, images: [], name: 'Nummers die je leuk vindt' }, ...fromLists]);
+    MADE.daily().then(daily => {
+      if (!alive()) return;
+      const cards = [...daily.map(d => ({ go: 'made:' + d.key, name: d.name, sub: d.sub, art: d.name, h: (d.key.slice(5) * 70 + 200) % 360 })),
+        { go: 'made:weekly', name: 'Ontdek wekelijks', sub: 'Nieuw voor jou, elke week vers', art: 'Ontdek', h: 80 },
+        { go: 'made:radar', name: 'Releaseradar', sub: 'Nieuw van jouw artiesten', art: 'Radar', h: 140 },
+        ...Object.entries(SMART).map(([k, [n, sub]], i) => ({ go: 'smart:' + k, name: n, sub, art: n, h: 20 + i * 50 }))];
+      $('#h-made', el).innerHTML = `<h2>Gemaakt voor jou</h2><div class="row-scroll">${cards.map(c => `<div class="card" data-go="${c.go}"><div class="cover made-cover" style="--h:${c.h}"><span>${esc(c.art)}</span></div><div class="t">${esc(c.name)}</div><div class="s">${esc(c.sub)}</div></div>`).join('')}</div>`;
+    });
     const fill = ([recent, top, albums]) => {
     if (recent?.items) recent = { items: recent.items.filter(it => it?.track?.album) };
     if (recent?.items?.length) {
@@ -1245,8 +1648,18 @@ const views = {
     const offline = plCache.get(id);
     const p = await get(`/playlists/${id}`, 120000).catch(() => cached || (offline && { id, uri: 'spotify:playlist:' + id, name: 'Playlist', images: [] }));
     if (!alive() || !p) return;
+    const own = p.owner?.id === S.me?.id;
     const L = await collection(el, {
       kind: 'Playlist', title: p.name, images: p.images, uri: p.uri, desc: p.description,
+      follow: !own && p.uri, reorder: own ? p : null,
+      more: anchor => menuAt(anchor, [
+        ...(own ? [{ label: 'Bewerken…', fn: () => editPlaylist(p) }, { label: 'Duplicaten opruimen', fn: () => dedupePlaylist(p) }] : []),
+        { label: 'Samenvoegen met…', fn: () => { const r = anchor.getBoundingClientRect(); mergeMenu(r.left, r.bottom, p); } },
+        { label: 'Exporteren (CSV)', fn: () => exportPlaylist({ ...p, tracks: L.L?.tracks }) },
+        { label: 'In de wachtrij', fn: () => queueContext(p.uri) },
+        { label: 'Kopieer link', fn: () => copyLink(p.uri) },
+        ...(own ? ['-', { label: 'Verwijderen…', fn: () => removePlaylist(p) }] : []),
+      ]),
       meta: `<b>${esc(p.owner?.display_name || '')}</b>${p.followers?.total ? ` · ${p.followers.total.toLocaleString('nl-NL')} volgers` : ''}`,
     }, alive);
     if (offline) L.set(offline);
@@ -1282,7 +1695,8 @@ const views = {
     const L = await collection(el, {
       kind: a.album_type === 'single' ? 'Single' : a.album_type === 'compilation' ? 'Compilatie' : 'Album', title: a.name, images: a.images, uri: a.uri,
       meta: `${a.artists.map(x => `<a data-go="artist:${esc(x.id)}"><b>${esc(x.name)}</b></a>`).join(', ')} · ${(a.release_date || '').slice(0, 4)}`,
-      album: false, numbers: true, cover: false,
+      album: false, numbers: true, cover: false, save: a.uri,
+      more: anchor => menuAt(anchor, [{ label: 'In de wachtrij', fn: () => queueContext(a.uri) }, { label: 'Kopieer link', fn: () => copyLink(a.uri) }]),
     }, alive);
     let items = a.tracks.items, next = a.tracks.next;
     const set = () => L.set(items.map(t => ({ ...norm(t, albumInfo), number: t.track_number })));
@@ -1510,8 +1924,21 @@ async function collection(el, o, alive) {
     <div style="min-width:0"><div class="kind">${esc(o.kind)}</div><h1>${esc(o.title)}</h1>${o.desc ? `<div class="desc">${o.desc.replace(/<[^>]+>/g, '')}</div>` : ''}<div class="meta">${o.meta || ''} <span class="c-count"></span></div></div></div>
     <div class="actions"><button class="big-play" data-ctx="${esc(o.uri)}">${icon('play')}</button>
     <button class="pill" id="c-smart" title="Shuffle die echt husselt, en wat je net hoorde naar achteren schuift">${icon('shuffle')} Slim shuffelen</button>
+    ${o.follow ? `<button class="pill" id="c-follow">Volgen</button>` : ''}${o.save ? `<button class="pill" id="c-save">Bewaren</button>` : ''}
+    ${o.more ? `<button class="icon" id="c-more" title="Meer">${icon('more')}</button>` : ''}
     <input class="filter" id="c-filter" placeholder="Zoek in de lijst…"></div><div id="c-list"><div class="loading-more">Laden…</div></div>`;
   tint(el, o.images);
+  // Volgen (playlist van een ander) of bewaren (album): via je bibliotheek.
+  for (const [id, uri, on, off] of [['#c-follow', o.follow, 'Gevolgd', 'Volgen'], ['#c-save', o.save, 'Bewaard', 'Bewaren']]) {
+    const b = $(id, el);
+    if (!b) continue;
+    soft(api('/me/library/contains?uris=' + uri)).then(r => { if (Array.isArray(r)) { b.classList.toggle('on', r[0]); b.textContent = r[0] ? on : off; } });
+    b.onclick = async () => {
+      const want = !b.classList.contains('on');
+      try { await api('/me/library?uris=' + uri, { method: want ? 'PUT' : 'DELETE' }); b.classList.toggle('on', want); b.textContent = want ? on : off; toast(want ? on : 'Uit je bibliotheek'); if (o.follow) renderSide(await myPlaylists(true)); } catch (e) { toast(e.message); }
+    };
+  }
+  $('#c-more', el)?.addEventListener('click', e => o.more(e.currentTarget));
   const bp = $('.big-play', el);
   updateBigPlay(bp);
   bp.onclick = () => playUri(o.uri);
@@ -1523,7 +1950,7 @@ async function collection(el, o, alive) {
   const coll = {
     set(list) {
       tracks = list;
-      if (!L) { listEl.innerHTML = ''; L = coll.L = trackList(listEl, list, { ctx: { uri: o.uri }, album: o.album !== false, numbers: o.numbers, cover: o.cover !== false }); }
+      if (!L) { listEl.innerHTML = ''; L = coll.L = trackList(listEl, list, { ctx: { uri: o.uri }, album: o.album !== false, numbers: o.numbers, cover: o.cover !== false, reorder: o.reorder }); }
       else { const scroll = $('#view').scrollTop; L.tracks = list; L.filter(); $('#view').scrollTop = scroll; }
       $('.c-count', el).textContent = extraMeta || `· ${list.length} nummers`;
       // Na een herstart: terug naar waar je was in de lijst.
@@ -2144,6 +2571,7 @@ async function start() {
   go(was?.where && was.where !== 'settings' ? was.where : 'home', was?.where ? was.arg ?? undefined : undefined, false);
   soft(api('/me')).then(me => { if (me) { S.me = me; store.set('me', me); } });
   myPlaylists(true).then(renderSide).catch(e => toast('Bibliotheek laden lukte niet: ' + e.message));
+  refreshRootlist();
   pollRemote(true);
   renderModes();
   renderVolume();

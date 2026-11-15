@@ -420,6 +420,7 @@ async fn handle(st: &mut State, cmd: Cmd) {
                 let got = match kind.as_str() {
                     "playlist" => crate::meta::playlist(&session, &arg).await,
                     "artistTop" => crate::meta::artist_top(&session, &arg).await,
+                    "rootlist" => crate::meta::rootlist(&session).await,
                     "radio" => {
                         let req: Value = serde_json::from_str(&arg).unwrap_or_default();
                         let previous = req["previous"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();

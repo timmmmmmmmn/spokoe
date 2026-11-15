@@ -498,3 +498,29 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .link:hover { text-decoration: underline; }
 .q-empty { color: var(--ink-3); font-size: 12.5px; padding: 6px 8px 10px; line-height: 1.5; }
 #panel-tabs button { padding: 5px 10px; }
+/* mappen en vastzetten in de zijbalk */
+#side-lists .pin { margin-left: auto; color: var(--accent); font-style: normal; font-weight: 900; }
+.folder-ph { background: var(--surface-2) !important; display: grid; place-items: center; color: var(--ink-2); }
+.folder-ph svg { width: 16px; height: 16px; }
+.folder-head .chev { margin-left: auto; color: var(--ink-3); transition: transform .15s; font-style: normal; }
+.folder-head .chev svg { width: 12px; height: 12px; }
+.folder.open .chev { transform: rotate(90deg); }
+.folder-items { display: none; padding-left: 14px; }
+.folder.open .folder-items { display: block; }
+.folder-empty { color: var(--ink-3); font-size: 12px; padding: 4px 8px 8px; }
+.folder.drop { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 9px; }
+.tr.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
+.tr .by { color: var(--ink-3); }
+.tr.unplayable .t::after { content: "niet beschikbaar"; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--ink-3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+.ask-box.wide { width: min(520px, 92vw); }
+.ask-f { display: block; margin-bottom: 12px; }
+.ask-f span { display: block; font-size: 12.5px; color: var(--ink-2); font-weight: 600; margin-bottom: 5px; }
+.ask-f textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; color: var(--ink); font: 13px/1.5 ui-monospace, monospace; outline: none; resize: vertical; }
+.ask-f textarea:focus { border-color: var(--accent); }
+.ask-f input[type=file] { color: var(--ink-2); font: inherit; }
+/* hoezen voor de zelfgemaakte mixen: een plaat met label */
+.made-cover { position: relative; display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(circle at 50% 50%, hsl(var(--h) 75% 62%) 0 17%, #050505 17.5% 30%, #111 30.5% 31%, #050505 31.5% 44%, #121212 44.5% 45%, #050505 45.5% 70%, transparent 70.5%), linear-gradient(140deg, hsl(var(--h) 55% 30%), #0b1482) !important; }
+.made-cover span { position: absolute; left: 10px; right: 10px; bottom: 9px; color: #fff; font: 800 15px/1.1 -apple-system, "SF Pro Display", sans-serif; letter-spacing: -.01em; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
+.made-cover.big { width: 210px; height: 210px; border-radius: 12px; flex: none; box-shadow: var(--shadow); }
+.made-cover.big span { font-size: 22px; }
