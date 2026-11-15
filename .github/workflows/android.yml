@@ -58,3 +58,7 @@ jobs:
           gh release create "android-v1.0.${{ github.run_number }}" Spokoe.apk \
             --title "Spokoe voor Android 1.0.${{ github.run_number }}" \
             --notes-file notes.md --latest=false
+          # Een vaste plek voor de downloadknop op de site: altijd de nieuwste APK.
+          gh release upload android-latest Spokoe.apk --clobber \
+            || gh release create android-latest Spokoe.apk --title "Spokoe voor Android (nieuwste)" \
+                 --notes "Altijd de nieuwste APK. Losse versies staan bij android-v1.0.N." --latest=false

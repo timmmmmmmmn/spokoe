@@ -87,7 +87,7 @@ object Updater {
             conn.setRequestProperty("User-Agent", "SpokoeApp")
             if (conn.responseCode != 200) return null
             val list = org.json.JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
-            val json = (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optString("tag_name").startsWith("android-") } ?: return null
+            val json = (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optString("tag_name").startsWith("android-v") } ?: return null
             val tag = json.optString("tag_name")
             val code = tag.substringAfterLast('.').toLongOrNull() ?: return null
             val assets = json.optJSONArray("assets") ?: return null
