@@ -84,17 +84,53 @@ pub fn status_item((title, artist, playing): &(String, String, bool)) {
         let line = if title.is_empty() { "Er speelt niets".to_string() } else { format!("{title} — {artist}") };
         ui.now.setTitle(&NSString::from_str(&line));
         ui.toggle.setTitle(&NSString::from_str(if *playing { "Pauzeer" } else { "Speel af" }));
-        if let Some(button) = ui.status.button(MainThreadMarker::new().unwrap()) {
-            let short: String = if *playing && !title.is_empty() {
-                let mut s: String = title.chars().take(24).collect();
-                if title.chars().count() > 24 {
-                    s.push('…');
-                }
-                format!(" {s}")
-            } else {
-                String::new()
-            };
-            button.setTitle(&NSString::from_str(&short));
+    });
+}
+
+thread_local! {
+    static STATUS_COVER: RefCell<Option<Retained<NSImage>>> = const { RefCell::new(None) };
+}
+
+/// Het menubalk-icoon: een plaatje vinyl met heel klein de hoes in het midden (of een gaatje).
+pub fn status_cover(cover: Option<&NSImage>) {
+    STATUS_COVER.with_borrow_mut(|c| *c = cover.map(|i| objc2::Message::retain(i)));
+    let mtm = MainThreadMarker::new().unwrap();
+    let draw = block2::RcBlock::new(|rect: objc2_foundation::NSRect| -> objc2::runtime::Bool {
+        let size = rect.size.width.min(rect.size.height);
+        let c = CGPoint::new(rect.origin.x + rect.size.width / 2.0, rect.origin.y + rect.size.height / 2.0);
+        let oval = |r: f64| objc2_app_kit::NSBezierPath::bezierPathWithOvalInRect(CGRect::new(CGPoint::new(c.x - r, c.y - r), CGSize::new(2.0 * r, 2.0 * r)));
+        let ink = NSColor::labelColor();
+        // De plaat, met twee dunne groeven.
+        ink.colorWithAlphaComponent(0.85).setFill();
+        oval(size / 2.0 - 0.5).fill();
+        let groove = NSColor::windowBackgroundColor().colorWithAlphaComponent(0.35);
+        groove.setStroke();
+        for r in [size * 0.36, size * 0.28] {
+            let g = oval(r);
+            g.setLineWidth(0.5);
+            g.stroke();
+        }
+        // Het label: de hoes als die er is, anders een gaatje.
+        let label = size * 0.2;
+        STATUS_COVER.with_borrow(|cover| match cover {
+            Some(img) => {
+                objc2_app_kit::NSGraphicsContext::saveGraphicsState_class();
+                oval(label).addClip();
+                img.drawInRect(CGRect::new(CGPoint::new(c.x - label, c.y - label), CGSize::new(2.0 * label, 2.0 * label)));
+                objc2_app_kit::NSGraphicsContext::restoreGraphicsState_class();
+            }
+            None => {
+                NSColor::windowBackgroundColor().setFill();
+                oval(size * 0.07).fill();
+            }
+        });
+        objc2::runtime::Bool::YES
+    });
+    let image = NSImage::imageWithSize_flipped_drawingHandler(CGSize::new(18.0, 18.0), false, &draw);
+    with_ui(|ui| {
+        if let Some(button) = ui.status.button(mtm) {
+            button.setImage(Some(&image));
+            button.setTitle(ns_string!(""));
         }
     });
 }
@@ -127,6 +163,13 @@ fn handle(text: &str) {
             }));
         }
         "login" => player::send(Cmd::Login),
+        "reconnect" => player::send(Cmd::Retry),
+        "devLose" if std::env::var("SPOTIMFY_DEV").is_ok() => player::send(Cmd::DevLose),
+        "check" => player::send(Cmd::Check { deep: true }),
+        "openLog" => {
+            let path = player::data_dir().join("spotimfy.log");
+            NSWorkspace::sharedWorkspace().openURL(&NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())));
+        }
         "logout" => player::send(Cmd::Logout),
         "setClientId" => {
             crate::settings::set("clientId", msg["id"].clone());
@@ -172,7 +215,7 @@ fn handle(text: &str) {
             with_ui(|ui| {
                 let name = unsafe { if dark { objc2_app_kit::NSAppearanceNameDarkAqua } else { objc2_app_kit::NSAppearanceNameAqua } };
                 ui.window.setAppearance(objc2_app_kit::NSAppearance::appearanceNamed(name).as_deref());
-                let (r, g, b) = if dark { (0.059, 0.063, 0.086) } else { (0.969, 0.973, 0.988) };
+                let (r, g, b) = if dark { (0.039, 0.059, 0.247) } else { (0.965, 0.969, 1.0) };
                 ui.window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0)));
             });
         }
@@ -253,6 +296,15 @@ define_class!(
                 }
                 remote(&cmd, None);
             }
+        }
+
+        /// Uit de slaapstand: even later echt nagaan of de verbinding nog leeft.
+        #[unsafe(method(didWake:))]
+        fn did_wake(&self, _n: &NSNotification) {
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                player::send(Cmd::Check { deep: true });
+            });
         }
 
         #[unsafe(method(showWindow:))]
@@ -488,12 +540,7 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
 fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Retained<NSMenuItem>, Retained<NSMenuItem>) {
     let status = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = status.button(mtm) {
-        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(ns_string!("music.note"), Some(ns_string!("Spotimfy")));
-        if let Some(image) = image {
-            image.setTemplate(true);
-            button.setImage(Some(&image));
-        }
-        button.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageLeading);
+        button.setImagePosition(objc2_app_kit::NSCellImagePosition::ImageOnly);
     }
     let menu = NSMenu::new(mtm);
     let none = NSEventModifierFlags::empty();
@@ -517,6 +564,14 @@ fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Re
 
 pub fn build(mtm: MainThreadMarker, host: &Host) {
     main_menu(mtm, host);
+    unsafe {
+        NSWorkspace::sharedWorkspace().notificationCenter().addObserver_selector_name_object(
+            host,
+            sel!(didWake:),
+            Some(objc2_app_kit::NSWorkspaceDidWakeNotification),
+            None,
+        )
+    };
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
@@ -535,7 +590,7 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
     window.setFrameAutosaveName(ns_string!("Hoofdvenster"));
     window.setDelegate(Some(ProtocolObject::from_ref(host)));
     window.setTabbingMode(objc2_app_kit::NSWindowTabbingMode::Disallowed);
-    window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(0.059, 0.063, 0.086, 1.0)));
+    window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(0.039, 0.059, 0.247, 1.0)));
 
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
     let content = unsafe { config.userContentController() };
@@ -567,6 +622,7 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
     let (status, now, toggle) = status_bar(mtm, host);
     load_page(&web);
     UI.with(|cell| *cell.borrow_mut() = Some(Ui { window, web, status, now, toggle, ready: false, big: None, queue: Vec::new() }));
+    status_cover(None);
     show_window();
 }
 

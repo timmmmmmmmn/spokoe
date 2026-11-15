@@ -87,6 +87,7 @@ pub fn track(title: &str, artist: &str, album: &str, duration_ms: u32, cover: &s
         publish();
         if cover.is_empty() {
             INFO.with_borrow(|i| crate::island::show(&i.title, &i.artist, None));
+            crate::ui::status_cover(None);
         } else {
             std::thread::spawn(move || fetch_cover(cover));
         }
@@ -113,6 +114,7 @@ fn fetch_cover(url: String) {
         if fresh {
             publish();
             INFO.with_borrow(|i| crate::island::show(&i.title, &i.artist, Some(&for_island)));
+            crate::ui::status_cover(Some(&for_island));
         }
     });
 }

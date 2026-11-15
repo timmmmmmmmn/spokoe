@@ -10,6 +10,7 @@ use librespot::core::authentication::Credentials;
 use librespot::core::cache::Cache;
 use librespot::core::config::{DeviceType, SessionConfig};
 use librespot::core::session::Session;
+use librespot::core::error::ErrorKind;
 use librespot::core::{SpotifyId, SpotifyUri};
 use librespot::metadata::audio::UniqueFields;
 use librespot::playback::audio_backend;
@@ -60,6 +61,14 @@ pub enum Cmd {
     Volume(f64),
     Shuffle(bool),
     Repeat { context: bool, track: bool },
+    /// Leeft de verbinding nog? (waakhond, na slaapstand)
+    Check { deep: bool },
+    /// De verbinding van generatie `gen` is weg.
+    Lost(u64),
+    /// Opnieuw proberen te verbinden.
+    Retry,
+    /// Alleen in testmodus: doen alsof de verbinding wegvalt.
+    DevLose,
 }
 
 static TX: OnceLock<UnboundedSender<Cmd>> = OnceLock::new();
@@ -102,6 +111,12 @@ struct ApiToken {
 
 struct State {
     live: Option<Live>,
+    /// Telt elke verbinding; een oud "weg"-bericht van een vorige verbinding telt niet.
+    generation: u64,
+    /// Hoe vaak opnieuw verbinden al mislukte (voor het wachten ertussen).
+    failures: u32,
+    /// Er wacht al een nieuwe poging.
+    retry_pending: bool,
     api: Option<ApiToken>,
     /// Of dit apparaat nu het actieve Connect-apparaat is (anders gaan knoppen via de Web API).
     active: bool,
@@ -120,7 +135,14 @@ fn now_ms() -> u64 {
 }
 
 async fn run(mut rx: UnboundedReceiver<Cmd>) {
-    let mut st = State { live: None, api: None, active: false };
+    let mut st = State { live: None, generation: 0, failures: 0, retry_pending: false, api: None, active: false };
+    // Waakhond: elke paar seconden kijken of de verbinding nog leeft.
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            send(Cmd::Check { deep: false });
+        }
+    });
     // Al eens ingelogd: meteen verbinden, zonder browser.
     if cache().ok().and_then(|c| c.credentials()).is_some() {
         connect(&mut st, false).await;
@@ -139,11 +161,15 @@ fn cache() -> Result<Cache, librespot::core::Error> {
     Cache::new(Some(&dir), Some(&dir), Some(&audio), Some(2 * 1024 * 1024 * 1024))
 }
 
-async fn connect(st: &mut State, browser: bool) {
-    status("connecting", json!({}));
+/// Verbinden; `true` als het lukte. Mislukt het door het netwerk, dan volgt vanzelf een nieuwe poging.
+async fn connect(st: &mut State, browser: bool) -> bool {
+    status(if st.failures > 0 { "offline" } else { "connecting" }, json!({}));
     let cache = match cache() {
         Ok(c) => c,
-        Err(e) => return status("error", json!({ "message": e.to_string() })),
+        Err(e) => {
+            status("error", json!({ "message": e.to_string() }));
+            return false;
+        }
     };
     let session_config = SessionConfig::default();
     let credentials = match cache.credentials() {
@@ -161,8 +187,14 @@ async fn connect(st: &mut State, browser: bool) {
             .await;
             match got {
                 Ok(Ok(t)) => Credentials::with_access_token(t.access_token),
-                Ok(Err(e)) => return status("needs-login", json!({ "message": e.to_string() })),
-                Err(e) => return status("needs-login", json!({ "message": e.to_string() })),
+                Ok(Err(e)) => {
+                    status("needs-login", json!({ "message": e.to_string() }));
+                    return false;
+                }
+                Err(e) => {
+                    status("needs-login", json!({ "message": e.to_string() }));
+                    return false;
+                }
             }
         }
     };
@@ -178,11 +210,20 @@ async fn connect(st: &mut State, browser: bool) {
         position_update_interval: Some(Duration::from_secs(5)),
         ..PlayerConfig::default()
     };
-    let Some(sink) = audio_backend::find(None) else { return status("error", json!({ "message": "geen geluid" })) };
-    let Some(mixer_builder) = mixer::find(None) else { return status("error", json!({ "message": "geen mixer" })) };
+    let Some(sink) = audio_backend::find(None) else {
+        status("error", json!({ "message": "geen geluid" }));
+        return false;
+    };
+    let Some(mixer_builder) = mixer::find(None) else {
+        status("error", json!({ "message": "geen mixer" }));
+        return false;
+    };
     let mixer = match mixer_builder(MixerConfig::default()) {
         Ok(m) => m,
-        Err(e) => return status("error", json!({ "message": e.to_string() })),
+        Err(e) => {
+            status("error", json!({ "message": e.to_string() }));
+            return false;
+        }
     };
     let player = Player::new(player_config, session.clone(), mixer.get_soft_volume(), move || sink(None, AudioFormat::default()));
     let events = player.get_player_event_channel();
@@ -193,26 +234,108 @@ async fn connect(st: &mut State, browser: bool) {
         initial_volume: volume,
         ..ConnectConfig::default()
     };
-    let (spirc, task) = match Spirc::new(connect_config, session.clone(), credentials, player, mixer).await {
-        Ok(x) => x,
-        Err(e) => {
+    let made = tokio::time::timeout(Duration::from_secs(20), Spirc::new(connect_config, session.clone(), credentials, player, mixer)).await;
+    let (spirc, task) = match made {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) if matches!(e.kind, ErrorKind::Unauthenticated | ErrorKind::PermissionDenied) => {
             // Opgeslagen inlog werkt niet meer: opnieuw via de browser.
             status("needs-login", json!({ "message": e.to_string() }));
-            return;
+            return false;
+        }
+        other => {
+            // Geen netwerk (of Spotify even weg): straks opnieuw.
+            let why = match other {
+                Ok(Err(e)) => e.to_string(),
+                _ => "verbinden duurt te lang".into(),
+            };
+            log::warn!("verbinden mislukt: {why}");
+            session.shutdown();
+            st.failures += 1;
+            status("offline", json!({ "message": why }));
+            schedule_retry(st);
+            return false;
         }
     };
-    tokio::spawn(task);
+    st.generation += 1;
+    let generation = st.generation;
+    tokio::spawn(async move {
+        task.await;
+        log::warn!("verbinding {generation} gestopt");
+        send(Cmd::Lost(generation));
+    });
     tokio::spawn(forward_events(events));
     let user = session.username();
     st.live = Some(Live { session, spirc: Arc::new(spirc) });
+    let was_offline = st.failures > 0;
+    st.failures = 0;
     status("ready", json!({ "user": user, "volume": volume as f64 / u16::MAX as f64 }));
+    if was_offline {
+        ui::send(json!({ "type": "reconnected" }));
+    }
+    true
+}
+
+/// Na een pauze (1, 2, 4 … tot 30 s) opnieuw proberen te verbinden.
+fn schedule_retry(st: &mut State) {
+    if st.retry_pending {
+        return;
+    }
+    st.retry_pending = true;
+    let wait = Duration::from_secs((1u64 << st.failures.min(5)).min(30));
+    tokio::spawn(async move {
+        tokio::time::sleep(wait).await;
+        send(Cmd::Retry);
+    });
+}
+
+/// De verbinding is weg: opruimen en opnieuw beginnen.
+fn lose(st: &mut State) {
+    if let Some(live) = st.live.take() {
+        log::warn!("verbinding kwijt, opnieuw verbinden");
+        let _ = live.spirc.shutdown();
+        live.session.shutdown();
+        st.failures = st.failures.max(1);
+        status("offline", json!({}));
+        schedule_retry(st);
+    }
 }
 
 const DONE_PAGE: &str = "Ingelogd! Je kunt dit tabblad sluiten en teruggaan naar Spotimfy.";
 
 async fn handle(st: &mut State, cmd: Cmd) {
     match cmd {
-        Cmd::Login => connect(st, true).await,
+        Cmd::Login => {
+            connect(st, true).await;
+        }
+        Cmd::Check { deep } => {
+            let Some(live) = &st.live else { return };
+            if live.session.is_invalid() {
+                return lose(st);
+            }
+            if deep {
+                // Na slaapstand kan de verbinding er nog "goed" uitzien terwijl hij dood is: echt iets vragen.
+                let session = live.session.clone();
+                let generation = st.generation;
+                tokio::spawn(async move {
+                    let probe = tokio::time::timeout(Duration::from_secs(6), session.spclient().get_user_profile(&session.username(), Some(1), Some(1))).await;
+                    if !matches!(probe, Ok(Ok(_))) {
+                        send(Cmd::Lost(generation));
+                    }
+                });
+            }
+        }
+        Cmd::DevLose => lose(st),
+        Cmd::Lost(generation) => {
+            if generation == st.generation {
+                lose(st);
+            }
+        }
+        Cmd::Retry => {
+            st.retry_pending = false;
+            if st.live.is_none() && cache().ok().and_then(|c| c.credentials()).is_some() {
+                connect(st, false).await;
+            }
+        }
         Cmd::Logout => {
             if let Some(live) = st.live.take() {
                 let _ = live.spirc.shutdown();

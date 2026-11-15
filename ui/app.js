@@ -57,8 +57,9 @@ window.spotimfy = {
       }
       case 'config': S.clientId = m.clientId || ''; S.redirect = m.redirect; return;
       case 'status': return onStatus(m);
-      case 'track': return onTrack({ uri: m.uri, name: m.name, artists: m.artists || [], album: { name: m.album, images: m.cover ? [{ url: m.cover }] : [] }, duration: m.duration, explicit: m.explicit }, true);
+      case 'track': S.asked = null; return onTrack({ uri: m.uri, name: m.name, artists: m.artists || [], album: { name: m.album, images: m.cover ? [{ url: m.cover }] : [] }, duration: m.duration, explicit: m.explicit }, true);
       case 'play':
+        S.asked = null;
         S.local = true; S.remote = null; S.playing = m.playing; S.pos = m.position; S.at = m.at;
         return renderPlay();
       case 'position': S.pos = m.position; S.at = m.at; return;
@@ -69,6 +70,7 @@ window.spotimfy = {
       case 'repeat': S.repeat = m.track ? 2 : m.context ? 1 : 0; return renderModes();
       case 'unavailable': return toast('Dit nummer is hier niet beschikbaar');
       case 'remote': return onRemote(m.cmd, m.ms);
+      case 'reconnected': return onReconnected();
       case 'fullscreen': return;
     }
   },
@@ -92,9 +94,35 @@ function onStatus(m) {
       $('#login-btn').disabled = true;
       $('#login-btn').textContent = 'Verbinden…';
     }
+  } else if (m.state === 'offline') {
+    if (!S.ready) {
+      login.hidden = false;
+      $('#login-btn').disabled = true;
+      $('#login-btn').textContent = 'Wachten op verbinding…';
+      $('#login-msg').textContent = 'Spotimfy kan Spotify nu niet bereiken. Zodra je internet het weer doet, gaat het vanzelf verder.';
+    } else {
+      // Bewaren wat er speelde, om straks verder te gaan.
+      if (!S.offline) S.lost = { ctx: S.ctx, track: S.track, pos: Math.round(position()), playing: S.playing && S.local };
+      S.offline = true;
+      S.playing = false;
+      renderPlay();
+      $('#offline').hidden = false;
+    }
   } else if (m.state === 'error') {
     toast(m.message || 'Er ging iets mis');
   }
+  if (m.state === 'ready') { S.offline = false; $('#offline').hidden = true; }
+}
+$('#offline button').onclick = () => { post('reconnect'); toast('Opnieuw verbinden…'); };
+
+/** Weer verbonden: verder waar de muziek was. */
+function onReconnected() {
+  const l = S.lost;
+  S.lost = null;
+  if (!l?.playing || !l.track) return;
+  toast('Weer verbonden');
+  if (l.ctx) resumeAt(l.ctx, l.track, l.pos);
+  else play({ tracks: [l.track.uri], position: l.pos });
 }
 $('#login-btn').onclick = () => { post('login'); $('#login-btn').disabled = true; $('#login-btn').textContent = 'Kijk in je browser…'; };
 
@@ -220,7 +248,19 @@ document.addEventListener('mouseover', e => {
 const withAdded = (t, x) => t && (x?.added_at ? { ...t, added: Date.parse(x.added_at) } : t);
 
 // ——— afspelen ———
-function play(o) { S.local = true; post('play', o); }
+/** Afspelen via de kern. Komt er binnen 6 s niets op gang, dan de verbinding nakijken en het nog één keer proberen. */
+function play(o, retried) {
+  S.local = true;
+  const asked = S.asked = Date.now();
+  post('play', o);
+  setTimeout(() => {
+    if (S.asked !== asked) return;
+    S.asked = null;
+    if (retried) return toast('Afspelen lukt niet. Kijk je internetverbinding na.');
+    post('check');
+    setTimeout(() => play(o, true), 1500);
+  }, 6000);
+}
 
 /** Knoppen: hier op de Mac via de kern, anders via de Web API op het andere apparaat. */
 async function ctl(cmd, arg) {
