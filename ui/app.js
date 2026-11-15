@@ -48,7 +48,7 @@ function rpc(cmd, extra = {}) {
 window.spotimfy = {
   recv(m) {
     switch (m.type) {
-      case 'token': case 'lyrics': case 'meta': case 'audioInfo': case 'fetchText': {
+      case 'token': case 'lyrics': case 'meta': case 'audioInfo': case 'fetchText': case 'update': {
         const w = waiting.get(m.id);
         if (!w) return;
         waiting.delete(m.id);
@@ -373,6 +373,7 @@ function onTrack(t, local) {
 function renderTrack() {
   const t = S.track;
   $('#np-cover').src = t ? pic(t.album.images, 128) : '';
+  $('#np-disc').style.setProperty('--cover', t ? `url('${pic(t.album.images, 128)}')` : 'none');
   if (!t) $('#np-cover').removeAttribute('src');
   $('#np-title').textContent = t?.name || '';
   $('#np-title').dataset.go = t?.album?.id ? 'album:' + t.album.id : '';
@@ -394,6 +395,7 @@ function renderPlay() {
   const b = $('#b-play');
   b.innerHTML = icon(S.playing ? 'pause' : 'play');
   b.classList.toggle('paused', !S.playing);
+  document.body.classList.toggle('is-playing', !!S.playing);
   b.title = S.playing ? 'Pauzeer (spatie)' : 'Speel af (spatie)';
   $('#lf-play').innerHTML = icon(S.playing ? 'pause' : 'play');
   $('#lf-play').classList.toggle('paused', !S.playing);
@@ -705,6 +707,8 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
     if (!force && L.painted && first === L.painted[0] && last === L.painted[1]) return;
     L.painted = [first, last];
     L.body.innerHTML = L.shown.slice(first, last).map((t, k) => row(t, first + k)).join('');
+    // De hoezen van de rijen hieronder alvast laden: scrollen blijft dan scherp.
+    for (const t of L.shown.slice(last, last + 40)) { const u = pic(t.album.images, 64); if (u && !preloaded.has(u)) { preloaded.add(u); new Image().src = u; } }
     markNow();
     checkLiked(L.shown.slice(first, last));
   };
@@ -732,6 +736,7 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
   return L;
 }
 const ROW = 54;
+const preloaded = new Set();
 const users = new Map();
 const userName = id => { const u = users.get(id); return typeof u === 'string' ? u : id === S.me?.id ? 'jij' : '…'; };
 
@@ -869,6 +874,7 @@ function findTrack(uri) {
 
 function updateBigPlay(b) {
   const on = S.ctx === b.dataset.ctx && S.playing;
+  $('.sleeve')?.classList.toggle('spin', !!$('.sleeve') && S.playing && (S.ctx === $('.sleeve').dataset.ctx || (S.track?.album?.id && $('.sleeve').dataset.ctx.endsWith(S.track.album.id))));
   b.innerHTML = icon(on ? 'pause' : 'play');
   b.classList.toggle('pausing', on);
 }
@@ -1695,7 +1701,7 @@ const views = {
     const L = await collection(el, {
       kind: a.album_type === 'single' ? 'Single' : a.album_type === 'compilation' ? 'Compilatie' : 'Album', title: a.name, images: a.images, uri: a.uri,
       meta: `${a.artists.map(x => `<a data-go="artist:${esc(x.id)}"><b>${esc(x.name)}</b></a>`).join(', ')} · ${(a.release_date || '').slice(0, 4)}`,
-      album: false, numbers: true, cover: false, save: a.uri,
+      album: false, numbers: true, cover: false, save: a.uri, sleeve: true,
       more: anchor => menuAt(anchor, [{ label: 'In de wachtrij', fn: () => queueContext(a.uri) }, { label: 'Kopieer link', fn: () => copyLink(a.uri) }]),
     }, alive);
     let items = a.tracks.items, next = a.tracks.next;
@@ -1789,7 +1795,8 @@ const views = {
         <li>Redirect URI: <code>${esc(S.redirect || 'http://127.0.0.1:8888/callback')}</code>, en vink <b>Web API</b> aan.</li>
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
-      <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="light">Licht</button><button data-t="dark">Donker</button></div></div>
+      <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="dark">Spotimfy</button><button data-t="light">Licht</button><button data-t="vinyl">Vinyl</button><button data-t="vinyl-dark">Vinyl donker</button></div>
+        <p style="margin-top:10px">De vinyl-thema's geven Spotimfy de sfeer van een platenkast: papier of notenhout, schreefletters, en wat er speelt draait als plaat.</p></div>
       <div class="box"><h3>Mixen en shuffle</h3><p>Hoe Spotimfy kiest als je geen playlist luistert, en bij slim shuffelen.</p>
         <div class="row-set"><span>Vertrouwd</span><input type="range" id="set-balance" min="0" max="1" step="0.05" value="${store.get('mixBalance', 0.5)}"><b>Ontdekken</b></div></div>
       <div class="box" id="audio-box"><h3>Geluid</h3><div class="empty" style="padding:10px 0">Laden…</div></div>
@@ -1798,6 +1805,7 @@ const views = {
       <div class="box"><h3>Sneltoetsen</h3><p>
         <kbd>spatie</kbd> afspelen/pauzeren · <kbd>⌘K</kbd> of <kbd>/</kbd> zoeken · <kbd>⌘→</kbd> <kbd>⌘←</kbd> volgende/vorige · <kbd>⇧→</kbd> <kbd>⇧←</kbd> 10 s verder/terug ·
         <kbd>⌘↑</kbd> <kbd>⌘↓</kbd> volume · <kbd>⌘L</kbd> songtekst · <kbd>⌘J</kbd> wachtrij · <kbd>⌘D</kbd> vind ik leuk · <kbd>⌘S</kbd> shuffle · <kbd>F</kbd> Nu speelt · <kbd>⌥⌘M</kbd> minispeler · sleep nummers naar een playlist in de zijbalk</p></div>
+      <div class="box"><h3>Bijwerken</h3><p id="upd-text">Spotimfy kijkt één keer per dag of er een nieuwe versie is.</p><div class="field"><button class="ghost" id="upd-check">Zoek nu naar updates</button><button class="primary" id="upd-go" hidden>Bijwerken en opnieuw openen</button></div></div>
       <div class="box"><h3>Over Spotimfy</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
     </div>`;
     $$('#set-theme button', el).forEach(b => b.classList.toggle('on', b.dataset.t === theme));
@@ -1806,6 +1814,12 @@ const views = {
       $('#' + id, el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const v = toVal(b.dataset.v); store.set(key, v); post('setting', { key, value: v }); $$(`#${id} button`, el).forEach(x => x.classList.toggle('on', x === b)); toast('Geldt vanaf de volgende start'); };
     };
     audioSettings($('#audio-box', el));
+    const showUpdate = u => {
+      $('#upd-text', el).textContent = u.error ? `Versie ${u.current}. ${u.error[0].toUpperCase() + u.error.slice(1)}.` : u.newer ? `Versie ${u.latest} is er (jij hebt ${u.current}).` : `Je hebt de nieuwste versie (${u.current}).`;
+      $('#upd-go', el).hidden = !(u.newer && u.url);
+      $('#upd-go', el).onclick = () => { toast('Bijwerken…'); post('installUpdate', { url: u.url }); };
+    };
+    $('#upd-check', el).onclick = async () => showUpdate((await rpc('checkUpdate')).data);
     $('#set-balance', el).onchange = e => { store.set('mixBalance', +e.target.value); toast('Opgeslagen'); };
     const isl = store.get('island', true);
     $$('#set-island button', el).forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === isl));
@@ -1920,7 +1934,10 @@ async function audioSettings(box) {
 /** De kop + knoppen + nummerlijst van een playlist, album of favorieten. */
 async function collection(el, o, alive) {
   $('#top-title').textContent = o.title;
-  el.innerHTML = `<div class="hero">${o.liked ? `<div class="ph liked-ph" style="width:210px;height:210px;border-radius:12px">${icon('heart-on')}</div>` : img(o.images, 300, '', o.title)}
+  const art = o.liked ? `<div class="ph liked-ph" style="width:210px;height:210px;border-radius:12px">${icon('heart-on')}</div>`
+    : o.sleeve ? `<div class="sleeve" data-ctx="${esc(o.uri)}"><div class="disc" style="--cover:url('${esc(pic(o.images, 300))}')"><i></i></div>${img(o.images, 300, 'jacket')}</div>`
+    : img(o.images, 300, '', o.title);
+  el.innerHTML = `<div class="hero${o.sleeve ? ' has-sleeve' : ''}">${art}
     <div style="min-width:0"><div class="kind">${esc(o.kind)}</div><h1>${esc(o.title)}</h1>${o.desc ? `<div class="desc">${o.desc.replace(/<[^>]+>/g, '')}</div>` : ''}<div class="meta">${o.meta || ''} <span class="c-count"></span></div></div></div>
     <div class="actions"><button class="big-play" data-ctx="${esc(o.uri)}">${icon('play')}</button>
     <button class="pill" id="c-smart" title="Shuffle die echt husselt, en wat je net hoorde naar achteren schuift">${icon('shuffle')} Slim shuffelen</button>
@@ -2439,6 +2456,8 @@ const commands = () => [
   ['Thema: donker', 'dark donker thema', () => { store.set('theme', 'dark'); applyTheme(); }],
   ['Thema: licht', 'light licht thema', () => { store.set('theme', 'light'); applyTheme(); }],
   ['Thema: systeem', 'system systeem thema', () => { store.set('theme', 'system'); applyTheme(); }],
+  ['Thema: vinyl', 'vinyl klassiek retro thema plaat', () => { store.set('theme', 'vinyl'); applyTheme(); }],
+  ['Thema: vinyl donker', 'vinyl donker hout retro thema', () => { store.set('theme', 'vinyl-dark'); applyTheme(); }],
   ['Nieuwe playlist', 'playlist maken nieuw', () => newPlaylist()],
   ['Willekeurig album', 'random album verras', () => randomAlbum()],
   [store.get('island', true) ? 'Eiland uitzetten' : 'Eiland aanzetten', 'eiland dynamic island melding pil', () => setIsland(!store.get('island', true))],
@@ -2556,8 +2575,9 @@ function applyTheme() {
   const t = store.get('theme', 'system');
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.dataset.theme = t;
+  document.documentElement.classList.toggle('vinyl', t.startsWith('vinyl'));
   // De titelbalk en schuifbalken van het venster in dezelfde kleur.
-  post('theme', { dark: t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches) });
+  post('theme', { dark: t === 'dark' || t === 'vinyl-dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches), vinyl: t.startsWith('vinyl') ? t : null });
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 applyTheme();
@@ -2572,6 +2592,12 @@ async function start() {
   soft(api('/me')).then(me => { if (me) { S.me = me; store.set('me', me); } });
   myPlaylists(true).then(renderSide).catch(e => toast('Bibliotheek laden lukte niet: ' + e.message));
   refreshRootlist();
+  // Eén keer per dag stil kijken of er een nieuwe versie is.
+  if (Date.now() - store.get('updCheck', 0) > 864e5) setTimeout(async () => {
+    store.set('updCheck', Date.now());
+    const u = (await rpc('checkUpdate').catch(() => ({}))).data;
+    if (u?.newer && u.url) toast(`Spotimfy ${u.latest} is er: Instellingen › Bijwerken`);
+  }, 8000);
   pollRemote(true);
   renderModes();
   renderVolume();

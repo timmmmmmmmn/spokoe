@@ -1,0 +1,19 @@
+# Bij een tag (v0.2.0 …): Spotimfy bouwen op een Mac en als zip bij de release zetten.
+# De app vindt die release zelf (Instellingen › Bijwerken).
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  mac:
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: ./bundle.sh
+      - run: cd target && ditto -c -k --keepParent Spotimfy.app Spotimfy.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/Spotimfy.zip

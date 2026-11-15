@@ -4,6 +4,7 @@ set -e
 cd "$(dirname "$0")"
 cargo build --release
 APP=target/Spotimfy.app
+VERSION=$(grep -m1 "^version" Cargo.toml | cut -d\" -f2)
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/spotimfy "$APP/Contents/MacOS/Spotimfy"
@@ -19,7 +20,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Spotimfy</string>
   <key>CFBundleIconFile</key><string>Spotimfy</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.music</string>

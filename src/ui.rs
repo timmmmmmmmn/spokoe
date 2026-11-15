@@ -223,6 +223,18 @@ fn handle(text: &str) {
             crate::settings::set("dsp", all);
         }
         "rebuild" => player::send(Cmd::Rebuild),
+        "checkUpdate" => {
+            let id = msg["id"].clone();
+            std::thread::spawn(move || send(json!({ "type": "update", "id": id, "data": crate::update::check() })));
+        }
+        "installUpdate" => {
+            let url = msg["url"].as_str().unwrap_or("").to_string();
+            std::thread::spawn(move || {
+                if let Err(e) = crate::update::install(&url) {
+                    send(json!({ "type": "toast", "text": format!("Bijwerken lukte niet: {e}") }));
+                }
+            });
+        }
         "saveFile" => {
             // Opslaan via het gewone Mac-venster (bijv. een playlist als CSV).
             let mtm = MainThreadMarker::new().unwrap();
@@ -273,7 +285,12 @@ fn handle(text: &str) {
             with_ui(|ui| {
                 let name = unsafe { if dark { objc2_app_kit::NSAppearanceNameDarkAqua } else { objc2_app_kit::NSAppearanceNameAqua } };
                 ui.window.setAppearance(objc2_app_kit::NSAppearance::appearanceNamed(name).as_deref());
-                let (r, g, b) = if dark { (0.039, 0.059, 0.247) } else { (0.965, 0.969, 1.0) };
+                let (r, g, b) = match msg["vinyl"].as_str() {
+                    Some("vinyl") => (0.945, 0.910, 0.839),
+                    Some("vinyl-dark") => (0.110, 0.078, 0.055),
+                    _ if dark => (0.039, 0.059, 0.247),
+                    _ => (0.965, 0.969, 1.0),
+                };
                 ui.window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0)));
             });
         }

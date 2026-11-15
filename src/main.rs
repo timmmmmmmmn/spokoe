@@ -9,6 +9,7 @@ mod nowplaying;
 mod player;
 mod settings;
 mod ui;
+mod update;
 
 use objc2::runtime::ProtocolObject;
 use objc2::MainThreadMarker;

@@ -33,7 +33,7 @@
   color-scheme: light;
 }
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+  :root:not([data-theme]) {
     --bg: #f6f7ff; --side: #eceefc; --surface: #fff; --surface-2: #e2e5fa; --hover: rgba(11,20,130,.05);
     --line: rgba(11,20,130,.10); --ink: #0d1240; --ink-2: #4c5285; --ink-3: #8a8fb8; --accent: #0b1482;
     --accent-ink: #a3ec55; --accent-soft: rgba(11,20,130,.09); --shadow: 0 18px 50px rgba(11,20,130,.16); color-scheme: light;
@@ -524,3 +524,56 @@ input[type=range] { accent-color: var(--accent); width: 100%; }
 .made-cover span { position: absolute; left: 10px; right: 10px; bottom: 9px; color: #fff; font: 800 15px/1.1 -apple-system, "SF Pro Display", sans-serif; letter-spacing: -.01em; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
 .made-cover.big { width: 210px; height: 210px; border-radius: 12px; flex: none; box-shadow: var(--shadow); }
 .made-cover.big span { font-size: 22px; }
+
+/* ——— albumhoes met een plaat die er half uit rolt ——— */
+.hero.has-sleeve { gap: 150px; }
+.sleeve { position: relative; width: 210px; height: 210px; flex: none; }
+.sleeve .jacket { position: relative; z-index: 2; width: 210px; height: 210px; border-radius: 4px; box-shadow: 6px 10px 30px rgba(0,0,0,.5); object-fit: cover; }
+.disc { position: absolute; z-index: 1; top: 5px; left: 5px; width: 200px; height: 200px; border-radius: 50%;
+  background:
+    radial-gradient(circle, #000 0 3.5%, transparent 4%),
+    radial-gradient(circle, transparent 0 17%, rgba(255,255,255,.05) 17.5%, transparent 18% 25%, rgba(255,255,255,.06) 25.5%, transparent 26% 33%, rgba(255,255,255,.05) 33.5%, transparent 34% 41%, rgba(255,255,255,.06) 41.5%, transparent 42%),
+    conic-gradient(from 30deg, #0d0d0d, #2a2a2a 12%, #0d0d0d 25%, #262626 37%, #0d0d0d 50%, #2a2a2a 62%, #0d0d0d 75%, #262626 87%, #0d0d0d);
+  box-shadow: 0 8px 26px rgba(0,0,0,.55);
+  animation: roll-out .9s cubic-bezier(.2,.8,.2,1) .15s both; }
+/* Het label in het midden: de hoes zelf. */
+.disc i { position: absolute; inset: 31%; border-radius: 50%; background: var(--cover) center / cover; box-shadow: 0 0 0 2px #0d0d0d; }
+.disc i::after { content: ""; position: absolute; inset: 44%; border-radius: 50%; background: var(--bg); }
+@keyframes roll-out { from { transform: translateX(0) rotate(-120deg); } to { transform: translateX(46%) rotate(0deg); } }
+.sleeve.spin .disc { animation: roll-out .9s cubic-bezier(.2,.8,.2,1) .15s both, spin-out 4s linear 1.05s infinite; }
+@keyframes spin-out { from { transform: translateX(46%) rotate(0deg); } to { transform: translateX(46%) rotate(360deg); } }
+
+/* ——— spelerbalk: in vinyl-thema's een draaiende plaat ——— */
+#np-disc { display: none; }
+html.vinyl #np-cover { display: none; }
+html.vinyl #np-disc { display: block; position: relative; width: 56px; height: 56px; border-radius: 50%; flex: none;
+  background: radial-gradient(circle, transparent 0 30%, rgba(255,255,255,.06) 31%, transparent 32% 40%, rgba(255,255,255,.06) 41%, transparent 42%), conic-gradient(#111, #333 25%, #111 50%, #333 75%, #111);
+  box-shadow: 0 4px 12px rgba(0,0,0,.35); cursor: pointer; }
+html.vinyl #np-disc i { position: absolute; inset: 30%; border-radius: 50%; background: var(--cover) center / cover; }
+html.vinyl #np-disc i::after { content: ""; position: absolute; inset: 42%; border-radius: 50%; background: var(--side); }
+html.vinyl body.is-playing #np-disc { animation: spin 3.2s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ——— vinyl-thema's ——— */
+:root[data-theme="vinyl"] {
+  --bg: #f1e8d6; --side: #e7dcc5; --surface: #f8f2e6; --surface-2: #e2d5ba; --hover: rgba(60,35,15,.06);
+  --line: rgba(60,35,15,.14); --ink: #2b1d12; --ink-2: #6b5440; --ink-3: #9a8570;
+  --accent: #a3271f; --accent-ink: #f8f2e6; --accent-soft: rgba(163,39,31,.10); --shadow: 0 16px 40px rgba(60,35,15,.22);
+  color-scheme: light;
+}
+:root[data-theme="vinyl-dark"] {
+  --bg: #1c140e; --side: #150f0a; --surface: #2a1e15; --surface-2: #3a2a1d; --hover: rgba(255,230,190,.05);
+  --line: rgba(255,230,190,.10); --ink: #f3e6cf; --ink-2: #c4ab8a; --ink-3: #8c7458;
+  --accent: #e0a84b; --accent-ink: #1c140e; --accent-soft: rgba(224,168,75,.14); --shadow: 0 18px 50px rgba(0,0,0,.6);
+  color-scheme: dark;
+}
+html.vinyl h1.page, html.vinyl .hero h1, html.vinyl h2, html.vinyl .lf-title, html.vinyl .top-hit .t, html.vinyl .login-card h1 {
+  font-family: "New York", "Iowan Old Style", Georgia, serif; font-weight: 700; letter-spacing: -.01em; }
+html.vinyl .hero h1 { font-weight: 800; }
+/* Papier: een heel lichte korrel. */
+html[data-theme="vinyl"] body { background-image: radial-gradient(rgba(60,35,15,.035) 1px, transparent 1px); background-size: 3px 3px; }
+/* Notenhout: lange, zachte nerven in de zijbalk. */
+html[data-theme="vinyl-dark"] #side { background: repeating-linear-gradient(92deg, #150f0a 0 7px, #18110b 7px 9px, #140e09 9px 15px); }
+html.vinyl .card .cover, html.vinyl .tile img { border-radius: 3px; }
+html.vinyl .big-play, html.vinyl #b-play { box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+html.vinyl .liked-ph { background: radial-gradient(circle at 50% 50%, var(--accent) 0 22%, #111 23% 100%) !important; color: var(--accent-ink) !important; }
