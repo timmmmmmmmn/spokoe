@@ -23,7 +23,8 @@ import java.net.URL
  */
 object Updater {
 
-    private const val LATEST = "https://api.github.com/repos/timmmmmmmmn/spotimfy-android/releases/latest"
+    // Mac- en Android-versies staan in dezelfde repo; Android neemt de nieuwste release met een .apk.
+    private const val LATEST = "https://api.github.com/repos/timmmmmmmmn/spotimfy/releases?per_page=30"
     private const val PREFS = "spotimfy-update"
     private const val CHECK_EVERY = 6 * 60 * 60 * 1000L
 
@@ -85,14 +86,15 @@ object Updater {
             conn.setRequestProperty("Accept", "application/vnd.github+json")
             conn.setRequestProperty("User-Agent", "SpotimfyApp")
             if (conn.responseCode != 200) return null
-            val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+            val list = org.json.JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            val json = (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optString("tag_name").startsWith("android-") } ?: return null
             val tag = json.optString("tag_name")
             val code = tag.substringAfterLast('.').toLongOrNull() ?: return null
             val assets = json.optJSONArray("assets") ?: return null
             for (i in 0 until assets.length()) {
                 val a = assets.getJSONObject(i)
                 if (a.optString("name").endsWith(".apk")) {
-                    return Release(code, tag.removePrefix("v"), json.optString("body").trim(), a.getString("browser_download_url"))
+                    return Release(code, tag.removePrefix("android-v"), json.optString("body").trim(), a.getString("browser_download_url"))
                 }
             }
             return null

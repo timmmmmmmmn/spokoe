@@ -3,7 +3,8 @@
 
 use serde_json::{json, Value};
 
-const RELEASES: &str = "https://api.github.com/repos/timmmmmmmmn/spotimfy/releases/latest";
+/// Mac- en Android-versies staan in dezelfde repo; de Mac neemt de nieuwste release met een .zip.
+const RELEASES: &str = "https://api.github.com/repos/timmmmmmmmn/spotimfy/releases?per_page=30";
 
 fn version_tuple(v: &str) -> Vec<u32> {
     v.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
@@ -20,7 +21,11 @@ pub fn check() -> Value {
         .send()
         .and_then(|r| r.text())
         .map(|t| serde_json::from_str::<Value>(&t).unwrap_or_default());
-    let Ok(r) = got else { return json!({ "current": current, "error": "geen verbinding met GitHub" }) };
+    let Ok(list) = got else { return json!({ "current": current, "error": "geen verbinding met GitHub" }) };
+    let zip = |r: &&Value| r["assets"].as_array().is_some_and(|a| a.iter().any(|x| x["name"].as_str().is_some_and(|n| n.ends_with(".zip"))));
+    let Some(r) = list.as_array().and_then(|a| a.iter().find(zip)).cloned() else {
+        return json!({ "current": current, "error": "nog geen release gevonden" });
+    };
     let Some(tag) = r["tag_name"].as_str() else { return json!({ "current": current, "error": "nog geen release gevonden" }) };
     let url = r["assets"]
         .as_array()
