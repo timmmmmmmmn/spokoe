@@ -342,6 +342,7 @@ function onTrack(t, local) {
     S.pos = 0; S.at = Date.now();
     if (local && S.stopAfter) { S.stopAfter = false; post('pause'); post('seek', { ms: 0 }); toast('Gestopt na het vorige nummer'); }
     if (local) remember(t);
+    if (local) queueOnTrack(t);
     if (local && S.mix) setTimeout(mixRefill, 1500);
     checkLiked([t]);
     lyricsFor(t);
@@ -728,6 +729,7 @@ function playFromList(L, i) {
   const t = L.shown[i];
   if (!t || t.playable === false) return;
   S.mix = null;
+  dropAuto();
   // Een los nummer uit een zoeklijst: dat nummer, dan een mix die erbij past.
   if (!L.ctx?.uri && L.mix) return playMix(t);
   if (L.ctx?.uri) {
@@ -789,8 +791,11 @@ document.addEventListener('click', e => {
 }, true);
 
 /** Een album, playlist of artiest afspelen (of een los nummer). */
+function dropAuto() { Q.items = Q.items.filter(x => !x.auto); Q.save(); }
+
 function playUri(uri, track) {
   S.mix = null;
+  dropAuto();
   if ((uri.startsWith('spotify:track:') || uri.startsWith('spotify:episode:')) && !track) {
     const t = findTrack(uri);
     if (t && uri.startsWith('spotify:track:')) return playMix(t);
@@ -832,6 +837,7 @@ document.addEventListener('contextmenu', e => {
     const items = [
       { label: 'Afspelen', fn: () => playUri(uri) },
       { label: 'Slim shuffelen', fn: () => smartShuffle(uri) },
+      { label: 'In de wachtrij', fn: () => queueContext(uri) },
       '-',
       { label: 'Kopieer link', fn: () => copyLink(uri) },
     ];
@@ -846,6 +852,7 @@ function trackMenu(x, y, t, playFn, L) {
   const items = [
     { label: 'Afspelen', fn: playFn },
     { label: 'Speel hierna', fn: () => queueTrack(t) },
+    { label: 'Achteraan in de wachtrij', fn: () => queueTrack(t, true) },
     '-',
     ...(t.album?.id ? [{ label: 'Naar album', fn: () => go('album', t.album.id) }] : []),
     ...t.artists.filter(a => a.id).slice(0, 3).map(a => ({ label: `Naar ${a.name}`, fn: () => go('artist', a.id) })),
@@ -853,6 +860,7 @@ function trackMenu(x, y, t, playFn, L) {
     { label: liked ? 'Verwijder uit leuk' : 'Vind ik leuk', fn: () => toggleLike(t) },
     { label: 'Aan playlist toevoegen…', fn: () => addToPlaylistMenu(x, y, t) },
     { label: 'Radio op basis van dit nummer', fn: () => radio(t) },
+    { label: noShuffle().has(t.uri) ? 'Weer in shuffle en mixen' : 'Niet in shuffle en mixen', fn: () => toggleNoShuffle(t) },
     ...(own ? [{ label: `Verwijder uit ${own.name}`, fn: () => removeFromPlaylist(own, t, L) }] : []),
     '-',
     { label: 'Kopieer link', fn: () => copyLink(t.uri) },
@@ -860,9 +868,62 @@ function trackMenu(x, y, t, playFn, L) {
   menu(x, y, items);
 }
 
-async function queueTrack(t) {
-  try { await api('/me/player/queue?uri=' + encodeURIComponent(t.uri), { method: 'POST' }); toast(`“${t.name}” speelt hierna`); if (S.panel === 'queue') setTimeout(renderQueue, 300); }
-  catch (e) { toast(e.status === 404 ? 'Speel eerst iets af' : e.message); }
+// ——— eigen wachtrij ———
+// Spotify laat apps de wachtrij niet herschikken. Daarom houdt Spotimfy zelf de wachtrij bij en
+// zet steeds precies één nummer klaar bij Spotify; de rest kun je slepen, weghalen en bewaren.
+// Jouw nummers gaan altijd voor wat de mix automatisch aanvult.
+const Q = {
+  items: store.get('queue', []),
+  ready: null, // het nummer dat al bij Spotify klaarstaat
+  save() { store.set('queue', this.items); if (S.panel === 'queue') renderQueue(); },
+};
+const slimT = t => ({ uri: t.uri, id: t.id, name: t.name, artists: t.artists.map(a => ({ name: a.name, id: a.id })), album: { name: t.album?.name || '', id: t.album?.id, images: t.album?.images?.slice(0, 1) || [] }, duration: t.duration });
+
+function queueAdd(tracks, { next = false, auto = false } = {}) {
+  const items = tracks.filter(t => t?.uri).map(t => ({ ...slimT(t), auto }));
+  if (next) Q.items.unshift(...items);
+  else if (auto) Q.items.push(...items);
+  else {
+    // Achteraan bij jouw nummers, maar vóór wat de mix zelf aanvulde.
+    const firstAuto = Q.items.findIndex(x => x.auto);
+    Q.items.splice(firstAuto < 0 ? Q.items.length : firstAuto, 0, ...items);
+  }
+  Q.save();
+  queueFeed();
+}
+
+/** Het eerstvolgende nummer bij Spotify klaarzetten (als er nog niets klaarstaat). */
+async function queueFeed() {
+  if (Q.ready || !Q.items.length || !S.local || !S.track) return;
+  const t = Q.items.shift();
+  Q.ready = t;
+  Q.save();
+  try { await api('/me/player/queue?uri=' + encodeURIComponent(t.uri), { method: 'POST' }); }
+  catch { Q.items.unshift(t); Q.ready = null; Q.save(); }
+}
+
+/** Bij elk nieuw nummer: was het ons klaargezette nummer, dan het volgende klaarzetten. */
+function queueOnTrack(t) {
+  if (Q.ready && sameSong(Q.ready, t)) Q.ready = null;
+  queueFeed();
+}
+
+async function queueTrack(t, end) {
+  if (!S.track) return toast('Speel eerst iets af');
+  queueAdd([t], { next: !end });
+  toast(end ? `“${t.name}” staat achteraan in de wachtrij` : `“${t.name}” speelt hierna`);
+}
+
+/** Een album of playlist in de wachtrij. */
+async function queueContext(uri) {
+  const [, kind, id] = uri.split(':');
+  let tracks = [];
+  if (kind === 'album') { const a = await get(`/albums/${id}`); tracks = a.tracks.items.map(t => norm(t, { name: a.name, id: a.id, images: a.images })); }
+  else if (kind === 'playlist') tracks = plCache.get(id) || await playlistItems(id).then(l => l.map(x => norm(x.item || x.track)).filter(Boolean), () => corePlaylist(id));
+  else if (uri.endsWith(':collection')) tracks = plCache.get('liked') || [];
+  if (!tracks.length) return toast('Niets om toe te voegen');
+  queueAdd(tracks);
+  toast(`${tracks.length} nummers in de wachtrij`);
 }
 function radio(t) {
   toast('Radio wordt gemaakt…');
@@ -915,16 +976,17 @@ function ask(title, placeholder = '', value = '') {
     input.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); done(null); } };
   });
 }
-async function newPlaylist(uris = []) {
-  const name = await ask('Nieuwe playlist', 'Naam');
-  if (!name) return;
+async function newPlaylist(uris = [], suggest = '', { quiet } = {}) {
+  const name = await ask('Nieuwe playlist', 'Naam', suggest);
+  if (!name) return null;
   try {
     const p = await api('/me/playlists', { method: 'POST', body: { name, public: false } })
       .catch(e => e.status === 404 || e.status === 403 ? api(`/users/${S.me.id}/playlists`, { method: 'POST', body: { name, public: false } }) : Promise.reject(e));
     if (uris.length) await addToPlaylist(p, uris);
     renderSide(await myPlaylists(true));
-    go('playlist', p.id);
-  } catch (e) { toast(e.message); }
+    if (!quiet) go('playlist', p.id);
+    return p;
+  } catch (e) { toast(e.message); return null; }
 }
 
 // ——— menu en melding ———
@@ -1033,9 +1095,23 @@ const views = {
   async home(el, _, alive) {
     const name = S.me?.display_name?.split(' ')[0];
     el.innerHTML = `<h1 class="page">${greeting()}${name ? ', ' + esc(name) : ''}</h1>
+      <div class="actions" style="padding-top:0;margin:-8px 0 14px"><button class="pill" id="h-random">${icon('disc')} Willekeurig album</button><button class="pill" id="h-mix">${icon('shuffle')} Mix van mijn favorieten</button></div>
       <div class="quick" id="h-quick"></div>
       <section id="h-recent"></section><section id="h-top"></section><section id="h-lists"></section><section id="h-albums"></section>`;
     $('#top-title').textContent = 'Home';
+    $('#h-random', el).onclick = randomAlbum;
+    $('#h-mix', el).onclick = async () => {
+      // Een mix op basis van een paar nummers die je vaak hoort.
+      toast('Mix wordt gemaakt…');
+      const top = await soft(get('/me/top/tracks?time_range=short_term&limit=10', 3600000));
+      const seeds = (top?.items || []).sort(() => Math.random() - 0.5).slice(0, 3).map(t => norm(t));
+      if (!seeds.length) return toast('Nog te weinig geluisterd voor een mix');
+      const mix = await mixFor(seeds, { count: 50 });
+      S.ctx = null;
+      S.mix = { list: [...seeds.slice(0, 1), ...mix].map(t => ({ uri: t.uri, name: t.name, artists: t.artists })), label: 'Mix van je favorieten' };
+      store.set('mix', S.mix);
+      play({ tracks: S.mix.list.map(t => t.uri) });
+    };
     const playlists = myPlaylists.list || store.get('playlists', []);
     const tiles = list => { $('#h-quick', el).innerHTML = list.slice(0, 8).map(o => `<div class="tile" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">${o.go === 'liked:' ? `<div class="ph liked-ph">${icon('heart-on')}</div>` : img(o.images, 64, '', o.name)}<span>${esc(o.name)}</span><button class="play" data-play="${esc(o.uri)}">${icon('play')}</button></div>`).join(''); };
     const fromLists = playlists.slice(0, 8).map(p => ({ go: 'playlist:' + p.id, uri: p.uri, images: p.images, name: p.name }));
@@ -1230,11 +1306,16 @@ const views = {
     el.innerHTML = `<div class="hero artist">${img(a.images, 300)}<div><div class="kind">Artiest</div><h1>${esc(a.name)}</h1>
       <div class="meta">${a.followers?.total ? a.followers.total.toLocaleString('nl-NL') + ' volgers' : ''}${a.genres?.length ? ' · ' + esc(a.genres.slice(0, 3).join(', ')) : ''}</div></div></div>
       <div class="actions"><button class="big-play" data-ctx="${esc(a.uri)}" data-play="${esc(a.uri)}">${icon('play')}</button>
-      <button class="pill" id="a-radio">Artiestenradio</button><button class="pill" id="a-follow">Volgen</button></div>
+      <button class="pill" id="a-radio">Artiestenradio</button><button class="pill" id="a-all">Alles van ${esc(a.name)}</button><button class="pill" id="a-disco">Discografie</button><button class="pill" id="a-follow">Volgen</button></div>
       <section id="a-top"></section><section id="a-albums"></section><section id="a-singles"></section>`;
     tint(el, a.images);
     updateBigPlay($('.big-play', el));
     $('#a-radio', el).onclick = () => { toast('Radio wordt gemaakt…'); playMix({ uri: a.uri, name: a.name, artists: [{ name: a.name, id: a.id }] }); };
+    $('#a-all', el).onclick = e => menuAt(e.currentTarget, [
+      { label: 'Op volgorde (nieuwste eerst)', fn: () => playArtistAll(a, { order: 'new' }) },
+      { label: 'Geshuffeld', fn: () => playArtistAll(a, { order: 'shuffle' }) },
+    ]);
+    $('#a-disco', el).onclick = () => playArtistAll(a, { order: 'old', albumsOnly: true });
     const fb = $('#a-follow', el);
     soft(api(`/me/library/contains?uris=${a.uri}`)).then(r => { if (Array.isArray(r)) { fb.classList.toggle('on', r[0]); fb.textContent = r[0] ? 'Volgend' : 'Volgen'; } });
     fb.onclick = async () => {
@@ -1295,6 +1376,8 @@ const views = {
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
       <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="light">Licht</button><button data-t="dark">Donker</button></div></div>
+      <div class="box"><h3>Mixen en shuffle</h3><p>Hoe Spotimfy kiest als je geen playlist luistert, en bij slim shuffelen.</p>
+        <div class="row-set"><span>Vertrouwd</span><input type="range" id="set-balance" min="0" max="1" step="0.05" value="${store.get('mixBalance', 0.5)}"><b>Ontdekken</b></div></div>
       <div class="box" id="audio-box"><h3>Geluid</h3><div class="empty" style="padding:10px 0">Laden…</div></div>
       <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spotimfy niet voorop staat.</p>
         <div class="seg" id="set-island"><button data-v="1">Aan</button><button data-v="0">Uit</button></div></div>
@@ -1309,6 +1392,7 @@ const views = {
       $('#' + id, el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const v = toVal(b.dataset.v); store.set(key, v); post('setting', { key, value: v }); $$(`#${id} button`, el).forEach(x => x.classList.toggle('on', x === b)); toast('Geldt vanaf de volgende start'); };
     };
     audioSettings($('#audio-box', el));
+    $('#set-balance', el).onchange = e => { store.set('mixBalance', +e.target.value); toast('Opgeslagen'); };
     const isl = store.get('island', true);
     $$('#set-island button', el).forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === isl));
     $('#set-island', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const on = b.dataset.v === '1'; store.set('island', on); post('island', { on }); $$('#set-island button', el).forEach(x => x.classList.toggle('on', x === b)); };
@@ -1482,7 +1566,7 @@ const noShuffle = () => new Set(store.get('noShuffle', []));
 /** Jouw smaak: top-artiesten en artiesten uit je liked songs (een dag onthouden). */
 async function taste() {
   const t = store.get('taste', null);
-  if (t && Date.now() - t.at < 864e5) return { top: new Set(t.top), liked: new Map(t.liked) };
+  if (t && Date.now() - t.at < 864e5) return taste.cache = { top: new Set(t.top), liked: new Map(t.liked) };
   const [a, b, l] = await Promise.all([
     soft(get('/me/top/artists?time_range=short_term&limit=10', 864e5)),
     soft(get('/me/top/artists?time_range=medium_term&limit=10', 864e5)),
@@ -1492,7 +1576,7 @@ async function taste() {
   const liked = new Map();
   for (const x of l || []) for (const ar of x.track?.artists || []) liked.set(ar.name.toLowerCase(), (liked.get(ar.name.toLowerCase()) || 0) + 1);
   store.set('taste', { at: Date.now(), top, liked: [...liked] });
-  return { top: new Set(top), liked };
+  return taste.cache = { top: new Set(top), liked };
 }
 
 const radioCore = (seed, count, previous) => rpc('meta', { kind: 'radio', arg: JSON.stringify({ seed, count, previous }) }).then(r => r.data, () => []);
@@ -1554,7 +1638,7 @@ async function playMix(seed, { label, position = 0 } = {}) {
   S.mix = { list: list.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })), label: label || (isArtist ? `Radio: ${seed.name}` : `Mix: ${seed.name}`), refilling: false };
   store.set('mix', S.mix);
   play({ tracks: list.map(t => t.uri), ...(position && !isArtist ? { position } : {}) });
-  if (!mix && !isArtist) first.then(more => { S.mix.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists }))); queueUris(more.slice(0, 15).map(t => t.uri)); });
+  if (!mix && !isArtist) first.then(more => { S.mix.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists }))); queueAdd(more.slice(0, 20), { auto: true }); });
 }
 
 /** Bijna aan het eind van de mix: aanvullen op basis van wat je net hoorde. */
@@ -1568,13 +1652,60 @@ async function mixRefill() {
   const more = await mixFor(seeds, { count: 20, skip: m.list });
   m.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })));
   store.set('mix', { list: m.list.slice(-120), label: m.label });
-  await queueUris(more.map(t => t.uri));
+  queueAdd(more, { auto: true });
   m.refilling = false;
 }
 
 /** Nummers achter de huidige zetten (via de wachtrij van Spotify). */
 async function queueUris(uris) {
   for (const u of uris) await soft(api('/me/player/queue?uri=' + encodeURIComponent(u), { method: 'POST' }));
+}
+
+/** Alle nummers van een artiest: nieuwste eerst, geshuffeld, of als discografie (eerste album tot laatste). */
+async function playArtistAll(a, { order, albumsOnly } = {}) {
+  toast(albumsOnly ? 'Discografie ophalen…' : 'Alles van ' + a.name + ' ophalen…');
+  const groups = albumsOnly ? 'album' : 'album,single';
+  const albums = (await pages(`/artists/${a.id}/albums?include_groups=${groups}&limit=10`, null, 80)).filter(Boolean);
+  albums.sort((x, y) => (x.release_date || '').localeCompare(y.release_date || ''));
+  if (order === 'new') albums.reverse();
+  let tracks = [];
+  const seen = new Set();
+  for (const al of albums) {
+    const full = await soft(get(`/albums/${al.id}`, 3600000));
+    for (const t of full?.tracks?.items || []) {
+      // Alleen nummers waar deze artiest echt op staat, en geen dubbele versies.
+      if (!t.artists.some(x => x.id === a.id)) continue;
+      const k = songKey(t);
+      if (seen.has(k) && !albumsOnly) continue;
+      seen.add(k);
+      tracks.push(norm(t, { name: full.name, id: full.id, images: full.images }));
+    }
+  }
+  if (!tracks.length) return toast('Niets gevonden');
+  if (order === 'shuffle') return smartShuffle(a.uri, tracks);
+  S.ctx = null; S.mix = null;
+  play({ tracks: tracks.slice(0, 700).map(t => t.uri) });
+  toast(`${albumsOnly ? 'Discografie' : 'Alles van ' + a.name}: ${tracks.length} nummers`);
+}
+
+/** Een willekeurig album uit je bibliotheek. */
+async function randomAlbum() {
+  const list = await pages('/me/albums?limit=50', null, 2000);
+  const pick = list.filter(x => x?.album)[Math.floor(Math.random() * list.length)]?.album;
+  if (!pick) return toast('Je hebt nog geen albums bewaard');
+  go('album', pick.id);
+  S.mix = null;
+  playUri(pick.uri);
+  toast(`Willekeurig album: ${pick.name}`);
+}
+
+/** Uit (of terug in) shuffle en mixen, zonder het te ontliken. */
+function toggleNoShuffle(t) {
+  const set = noShuffle();
+  const on = !set.has(t.uri);
+  on ? set.add(t.uri) : set.delete(t.uri);
+  store.set('noShuffle', [...set]);
+  toast(on ? `“${t.name}” komt niet meer in shuffle en mixen` : `“${t.name}” mag weer in shuffle en mixen`);
 }
 
 /** Slim shuffelen: echt willekeurig, recent gehoorde nummers achteraan, niet twee keer dezelfde artiest na elkaar. */
@@ -1586,13 +1717,22 @@ async function smartShuffle(uri, tracks) {
     else if (kind === 'album') { const a = await get(`/albums/${id}`); tracks = a.tracks.items.map(t => norm(t, { name: a.name, id: a.id, images: a.images })); }
     else if (uri.endsWith(':collection')) tracks = (await pages('/me/tracks?limit=50')).map(x => norm(x.track)).filter(Boolean);
   }
-  tracks = tracks.filter(t => t.playable !== false && !t.episode);
+  const banned = noShuffle();
+  tracks = tracks.filter(t => t.playable !== false && !t.episode && !banned.has(t.uri));
   if (!tracks.length) return;
   const recent = new Map(store.get('hist', []).map((h, i) => [h.uri, i]));
   const a = [...tracks];
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   const fresh = a.filter(t => !recent.has(t.uri) || recent.get(t.uri) > 400);
   const heard = a.filter(t => recent.has(t.uri) && recent.get(t.uri) <= 400).sort((x, y) => recent.get(y.uri) - recent.get(x.uri));
+  // Instelling: meer wat je weinig hoort (ontdekken) of meer je favorieten.
+  const balance = store.get('mixBalance', 0.5);
+  const favs = taste.cache;
+  if (favs && balance !== 0.5) {
+    const w = t => (favs.top.has((t.artists[0]?.name || '').toLowerCase()) ? 1 : 0) + Math.min(1, (favs.liked.get((t.artists[0]?.name || '').toLowerCase()) || 0) / 5);
+    // Een zachte voorkeur: willekeurig blijft het, maar de kans schuift.
+    fresh.sort((x, y) => (Math.random() + (balance < 0.5 ? -w(x) : w(x)) * Math.abs(balance - 0.5)) - (Math.random() + (balance < 0.5 ? -w(y) : w(y)) * Math.abs(balance - 0.5)));
+  }
   const out = [...fresh, ...heard];
   for (let i = 1; i < out.length; i++) {
     if (out[i].artists[0]?.name === out[i - 1].artists[0]?.name) {
@@ -1638,9 +1778,9 @@ function togglePanel(which) {
   if (S.panel === which) { S.panel = null; $('#panel').hidden = true; }
   else { S.panel = which; $('#panel').hidden = false; }
   $('#b-lyrics').classList.toggle('on', S.panel === 'lyrics');
-  $('#b-queue').classList.toggle('on', S.panel === 'queue');
+  $('#b-queue').classList.toggle('on', S.panel === 'queue' || S.panel === 'history');
   $$('#panel-tabs button').forEach(b => b.classList.toggle('on', b.dataset.p === S.panel));
-  if (S.panel === 'queue') renderQueue();
+  if (S.panel === 'queue' || S.panel === 'history') renderQueue();
   if (S.panel === 'lyrics') renderLyricsPanel();
 }
 $('#panel-close').onclick = () => togglePanel(S.panel);
@@ -1648,19 +1788,59 @@ $('#panel-tabs').onclick = e => { const b = e.target.closest('button'); if (b &&
 
 async function renderQueue() {
   const body = $('#panel-body');
+  if (S.panel !== 'queue' && S.panel !== 'history') return;
+  if (S.panel === 'history') return renderHistory();
+  const row = (t, extra = '') => `<div class="q${extra}" data-uri="${esc(t.uri)}">${img(t.album?.images, 64)}<div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a => a.name).join(', '))}</div></div></div>`;
+  if (!S.track) { body.innerHTML = '<div class="empty">Speel iets af om de wachtrij te zien.</div>'; return; }
+  const from = S.mix?.label || (S.ctx && ((myPlaylists.list || []).find(p => p.uri === S.ctx)?.name || $('.hero h1')?.textContent));
+  const mine = Q.items.map((t, i) => ({ t, i })).filter(x => !x.t.auto), auto = Q.items.map((t, i) => ({ t, i })).filter(x => x.t.auto);
+  const item = ({ t, i }) => `<div class="q qi" data-qi="${i}" data-uri="${esc(t.uri)}" draggable="true">${img(t.album?.images, 64)}<div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a => a.name).join(', '))}</div></div><button class="icon q-x" data-qx="${i}" title="Uit de wachtrij">${icon('x')}</button></div>`;
+  body.innerHTML = `<h4>Speelt nu${from ? ` · ${esc(from)}` : ''}</h4>${row(S.track, ' now')}
+    ${Q.ready ? `<h4>Staat klaar</h4>${row(Q.ready)}` : ''}
+    <h4 class="q-head">Jouw wachtrij ${mine.length ? `<span><button class="link" id="q-share">Delen</button> · <button class="link" id="q-save">Bewaar als playlist</button> · <button class="link" id="q-clear">Wissen</button></span>` : ''}</h4>
+    ${mine.map(item).join('') || '<div class="q-empty">Rechtsklik op een nummer › Speel hierna, of sleep een nummer hierheen.</div>'}
+    ${auto.length ? `<h4>Daarna${S.mix ? ' · mix' : ''}</h4>${auto.slice(0, 30).map(item).join('')}` : ''}`;
+  const all = [S.track, Q.ready, ...Q.items];
+  $$('.q', body).forEach(el => { el._track = Q.items[+el.dataset.qi] || all.find(t => t?.uri === el.dataset.uri); });
+  $$('[data-qx]', body).forEach(b => b.onclick = e => { e.stopPropagation(); Q.items.splice(+b.dataset.qx, 1); Q.save(); });
+  $$('.qi', body).forEach(el => el.ondblclick = () => { const t = Q.items.splice(+el.dataset.qi, 1)[0]; Q.save(); play({ tracks: [t.uri] }); });
+  const mineTracks = () => Q.items.filter(x => !x.auto);
+  $('#q-clear')?.addEventListener('click', () => { Q.items = Q.items.filter(x => x.auto); Q.save(); });
+  $('#q-save')?.addEventListener('click', () => newPlaylist(mineTracks().map(t => t.uri), 'Wachtrij ' + new Date().toLocaleDateString('nl-NL')));
+  $('#q-share')?.addEventListener('click', async () => {
+    // Delen = een playlist maken met je wachtrij en de link kopiëren.
+    const p = await newPlaylist(mineTracks().map(t => t.uri), 'Wachtrij van ' + (S.me?.display_name || 'mij'), { quiet: true });
+    if (p) { post('copy', { text: `https://open.spotify.com/playlist/${p.id}` }); toast('Link naar je wachtrij gekopieerd'); }
+  });
+}
+
+/** Slepen binnen de wachtrij (volgorde) en nummers erheen slepen. */
+let qDrag = null;
+$('#panel-body').addEventListener('dragstart', e => { const el = e.target.closest?.('.qi'); if (el) { qDrag = +el.dataset.qi; e.dataTransfer.effectAllowed = 'move'; } });
+$('#panel-body').addEventListener('dragover', e => { if (S.panel === 'queue' && (qDrag != null || dragged)) { e.preventDefault(); $$('.q-drop').forEach(x => x.classList.remove('q-drop')); e.target.closest('.qi')?.classList.add('q-drop'); } });
+$('#panel-body').addEventListener('drop', e => {
   if (S.panel !== 'queue') return;
-  let q = null;
-  try { q = await api('/me/player/queue'); } catch {}
-  if (S.panel !== 'queue') return;
-  const row = (t, now) => {
-    const n = norm(t);
-    return n ? `<div class="q${now ? ' now' : ''}" data-uri="${esc(n.uri)}">${img(n.album.images, 64)}<div><div class="t">${esc(n.name)}</div><div class="a">${esc(n.artists.map(a => a.name).join(', '))}</div></div></div>` : '';
-  };
-  if (!q?.currently_playing) { body.innerHTML = '<div class="empty">Speel iets af om de wachtrij te zien.</div>'; return; }
-  const from = S.ctx && ((myPlaylists.list || []).find(p => p.uri === S.ctx)?.name || $('.hero h1')?.textContent);
-  body.innerHTML = `<h4>Speelt nu${from ? ` · uit ${esc(from)}` : ''}</h4>${row(q.currently_playing, true)}<h4>Hierna</h4>${(q.queue || []).map(t => row(t)).join('') || '<div class="empty">Niets meer</div>'}`;
-  const all = [q.currently_playing, ...(q.queue || [])];
-  $$('.q', body).forEach((el, i) => { el._track = norm(all[i]); el.ondblclick = () => play({ tracks: [el.dataset.uri] }); });
+  e.preventDefault();
+  const target = e.target.closest('.qi');
+  const to = target ? +target.dataset.qi : Q.items.filter(x => !x.auto).length;
+  if (qDrag != null) {
+    const [t] = Q.items.splice(qDrag, 1);
+    Q.items.splice(to > qDrag ? to - 1 : to, 0, { ...t, auto: target ? Q.items[Math.min(to, Q.items.length - 1)]?.auto && t.auto : false });
+    Q.save();
+  } else if (dragged) {
+    Q.items.splice(to, 0, { ...slimT(dragged), auto: false });
+    Q.save();
+    queueFeed();
+  }
+  qDrag = null;
+});
+$('#panel-body').addEventListener('dragend', () => { qDrag = null; $$('.q-drop').forEach(x => x.classList.remove('q-drop')); });
+
+/** Wat je de afgelopen 24 uur hoorde. */
+function renderHistory() {
+  const h = store.get('hist', []).filter(x => Date.now() - x.t < 864e5);
+  $('#panel-body').innerHTML = `<h4>Afgelopen 24 uur · ${h.length} nummers</h4>` + (h.map(x => `<div class="q" data-uri="${esc(x.uri)}"><img src="${esc(x.cover)}" alt=""><div><div class="t">${esc(x.name)}</div><div class="a">${esc(x.artists.join(', '))} · ${new Date(x.t).toLocaleTimeString('nl-NL', { hour: '2-digit', minute: '2-digit' })}</div></div></div>`).join('') || '<div class="empty">Nog niets gehoord vandaag.</div>');
+  $$('#panel-body .q').forEach(el => { const x = h.find(y => y.uri === el.dataset.uri); el._track = x && { uri: x.uri, name: x.name, artists: x.artists.map(name => ({ name })), album: { name: '', images: [{ url: x.cover }] } }; el.ondblclick = () => el._track && playMix(el._track); });
 }
 
 const lyricsCache = new Map();
@@ -1833,6 +2013,7 @@ const commands = () => [
   ['Thema: licht', 'light licht thema', () => { store.set('theme', 'light'); applyTheme(); }],
   ['Thema: systeem', 'system systeem thema', () => { store.set('theme', 'system'); applyTheme(); }],
   ['Nieuwe playlist', 'playlist maken nieuw', () => newPlaylist()],
+  ['Willekeurig album', 'random album verras', () => randomAlbum()],
   [store.get('island', true) ? 'Eiland uitzetten' : 'Eiland aanzetten', 'eiland dynamic island melding pil', () => setIsland(!store.get('island', true))],
   ...(S.track ? [['Radio op basis van dit nummer', 'radio', () => radio(S.track)]] : []),
 ];
