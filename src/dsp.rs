@@ -233,8 +233,14 @@ impl Stretch {
     }
 }
 
+/// Maakt de echte uitgang (opnieuw) aan.
+pub type Opener = Box<dyn Fn() -> Box<dyn Sink> + Send>;
+
 pub struct DspSink {
-    inner: Box<dyn Sink>,
+    /// Alleen open zolang er gespeeld wordt: op pauze geven we het audioapparaat vrij
+    /// (anders houdt het systeem de app voor "actief" en kan de computer niet slapen).
+    inner: Option<Box<dyn Sink>>,
+    open: Opener,
     version: u64,
     p: Params,
     eq: [[Biquad; 10]; 2],
@@ -251,9 +257,10 @@ pub struct DspSink {
 }
 
 impl DspSink {
-    pub fn new(inner: Box<dyn Sink>) -> Self {
+    pub fn new(open: Opener) -> Self {
         Self {
-            inner,
+            inner: None,
+            open,
             version: 0,
             p: Params::default(),
             eq: [[Biquad::default(); 10]; 2],
@@ -309,11 +316,20 @@ impl DspSink {
         }
     }
 
+    fn inner(&mut self) -> &mut Box<dyn Sink> {
+        if self.inner.is_none() {
+            let mut sink = (self.open)();
+            let _ = sink.start();
+            self.inner = Some(sink);
+        }
+        self.inner.as_mut().unwrap()
+    }
+
     fn out(&mut self, samples: Vec<f64>, conv: &mut Converter) -> SinkResult<()> {
         if samples.is_empty() {
             return Ok(());
         }
-        self.inner.write(AudioPacket::Samples(samples), conv)
+        self.inner().write(AudioPacket::Samples(samples), conv)
     }
 }
 
@@ -322,7 +338,8 @@ impl Sink for DspSink {
         self.refresh();
         *TARGET.lock().unwrap() = 1.0;
         self.gain = if self.p.bitperfect || self.p.fade_ms <= 0.0 { 1.0 } else { 0.0 };
-        self.inner.start()
+        // Het apparaat gaat pas open bij het eerste geluid (zie inner()).
+        Ok(())
     }
 
     fn stop(&mut self) -> SinkResult<()> {
@@ -343,14 +360,17 @@ impl Sink for DspSink {
         self.tail.clear();
         self.holding = false;
         self.mixing = None;
-        self.inner.stop()
+        // Laten uitspelen wat er nog in de buffer zit, en dan het apparaat vrijgeven.
+        let result = self.inner.as_mut().map(|s| s.stop()).unwrap_or(Ok(()));
+        self.inner = None;
+        result
     }
 
     fn write(&mut self, packet: AudioPacket, conv: &mut Converter) -> SinkResult<()> {
         self.refresh();
-        let AudioPacket::Samples(mut s) = packet else { return self.inner.write(packet, conv) };
+        let AudioPacket::Samples(mut s) = packet else { return self.inner().write(packet, conv) };
         if self.p.bitperfect {
-            return self.inner.write(AudioPacket::Samples(s), conv);
+            return self.inner().write(AudioPacket::Samples(s), conv);
         }
         let (changed, jumped, frames, episode) = track(|t| {
             let r = (t.changed, t.jumped.take(), t.frames, t.episode);

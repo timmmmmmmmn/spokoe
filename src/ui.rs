@@ -534,6 +534,7 @@ impl Host {
 /// De pagina zit in de app zelf: geen netwerk nodig om hem te tonen.
 fn page() -> String {
     include_str!("../ui/index.html")
+        .replace("<html lang=\"nl\">", "<html lang=\"nl\" class=\"mac\">")
         .replace("/*CSS*/", include_str!("../ui/app.css"))
         .replace("//JS", include_str!("../ui/app.js"))
 }
@@ -721,7 +722,14 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
         web.setInspectable(true);
     }
 
-    let root = NSView::initWithFrame(mtm.alloc(), frame);
+    // Onder de pagina: echte macOS-vibrancy, zodat je bureaublad wazig door de zijbalk schemert.
+    let root: Retained<NSView> = {
+        let fx = objc2_app_kit::NSVisualEffectView::initWithFrame(mtm.alloc(), frame);
+        fx.setMaterial(objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+        fx.setBlendingMode(objc2_app_kit::NSVisualEffectBlendingMode::BehindWindow);
+        fx.setState(objc2_app_kit::NSVisualEffectState::Active);
+        Retained::into_super(fx)
+    };
     root.addSubview(&web);
     // De strook ligt bovenop de pagina; die is niet "flipped", dus bovenaan = maxY.
     let strip: Retained<DragStrip> = unsafe {

@@ -22,6 +22,13 @@ const store = {
 };
 const idOf = uri => String(uri || '').split(':').pop();
 const isMobile = () => document.documentElement.classList.contains('mobile');
+/** Tablet: een breed scherm in de app (ook een telefoon die je dwars houdt is breed genoeg niet). */
+function layout() {
+  const tablet = isMobile() && Math.min(screen.width, screen.height) >= 600 && innerWidth >= 760;
+  document.documentElement.classList.toggle('tablet', tablet);
+}
+layout();
+addEventListener('resize', () => { layout(); setupGlisse.sync?.(); });
 const icon = (id, cls = '') => `<svg class="${cls}"><use href="#i-${id}"/></svg>`;
 
 // ——— toestand ———
@@ -374,6 +381,24 @@ function onTrack(t, local) {
   markNow();
 }
 
+/** Een kleine, al wazige versie van de hoes (op Android knipt Chrome een CSS-blur af onder de statusbalk). */
+function blurredCover(url, done) {
+  if (!url) return;
+  const im = new Image();
+  im.crossOrigin = 'anonymous';
+  im.onload = () => {
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 96;
+      const x = c.getContext('2d');
+      x.filter = 'blur(10px) saturate(1.6) brightness(.5)';
+      x.drawImage(im, -24, -24, 144, 144);
+      done(c.toDataURL('image/jpeg', .8));
+    } catch { done(url); }
+  };
+  im.src = url;
+}
+
 // ——— spelerbalk ———
 function renderTrack() {
   const t = S.track;
@@ -392,7 +417,13 @@ function renderTrack() {
   document.title = t ? `${t.name} · ${t.artists.map(a => a.name).join(', ')}` : 'Spokoe';
   if (t) {
     const big = pic(t.album.images, 640);
-    $('.lf-bg').style.backgroundImage = `url("${big}")`;
+    // Telefoon: een <img> (een CSS-achtergrond hier laat Android een strook onder de statusbalk zien).
+    if (isMobile()) blurredCover(pic(t.album.images, 64), url => {
+      if (S.track !== t) return;
+      const bg = $('.lf-bg');
+      (bg.querySelector('img') || bg.appendChild(document.createElement('img'))).src = url;
+    });
+    else $('.lf-bg').style.backgroundImage = `url("${big}")`;
     $('.lf-cover').src = big;
     $('.lf-title').textContent = t.name;
     $('.lf-artist').textContent = t.artists.map(a => a.name).join(', ');
@@ -678,6 +709,7 @@ async function show(entry) {
   view.scrollTop = 0;
   $('#top-title').textContent = '';
   $$('#nav button, #mnav [data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === entry.where));
+  glisseSync();
   $$('#side-lists button').forEach(b => b.classList.toggle('on', b.dataset.go === `${entry.where}:${entry.arg}`));
   $('#back').disabled = !hist.length;
   $('#fwd').disabled = !ahead.length;
@@ -2039,6 +2071,8 @@ async function collection(el, o, alive) {
 /** Een zachte kleur uit de hoes achter de kop. */
 function tint(el, images) {
   const u = pic(images, 64);
+  const big = pic(images, 300);
+  if (big) $('.hero', el)?.style.setProperty('--hero-img', `url("${big}")`);
   if (!u) return;
   const im = new Image();
   im.crossOrigin = 'anonymous';
@@ -2409,6 +2443,7 @@ function renderLyricsPanel() {
 function openLyricsFull() {
   if (!S.track) return;
   $('#lyrics-full').hidden = false;
+  glisseSync();
   renderLyricsFull();
   if (!lyr) lyricsFor(S.track);
 }
@@ -2420,7 +2455,9 @@ function renderLyricsFull() {
   renderTrack();
   lastLine = -2;
 }
-$('#lyrics-full .lf-close').onclick = () => $('#lyrics-full').hidden = true;
+$('#lyrics-full .lf-close').onclick = () => { $('#lyrics-full').hidden = true; glisseSync(); };
+new MutationObserver(() => glisseSync()).observe($('#lyrics-full'), { attributes: true, attributeFilter: ['hidden'] });
+new MutationObserver(() => glisseSync()).observe($('#panel'), { attributes: true, attributeFilter: ['hidden'] });
 document.addEventListener('click', e => {
   const p = e.target.closest('.synced p[data-l]');
   if (p && lyr?.synced) ctl('seek', lyr.lines[+p.dataset.l].t);
@@ -2664,6 +2701,7 @@ applyTheme();
 
 // ——— opstarten ———
 async function start() {
+  setupGlisse();
   const cachedLists = store.get('playlists', null);
   if (cachedLists) renderSide(cachedLists);
   const was = store.get('page', null);
@@ -2693,6 +2731,29 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
 
 renderPlay();
 renderModes();
+// ——— Liquid Glass-navigatie (alleen de Android-app, zoals in de andere Tim-apps) ———
+// Glisse (https://github.com/0kzh/glisse, MIT) tekent de zwevende balk met echte breking. Kan het
+// toestel het niet aan (of hapert het scrollen), dan blijft de gewone balk.
+async function setupGlisse() {
+  if (!document.documentElement.classList.contains('android') || document.documentElement.classList.contains('tablet')) return;
+  let g;
+  try { g = await import('./lib/glisse.js'); } catch { return; }
+  if (!g.kan()) return;
+  const tabs = [...$$('.mnav-pill button')].map(b => ({ id: b.dataset.go, title: b.querySelector('span').textContent, svg: `<svg viewBox="0 0 24 24" fill="currentColor">${$(b.querySelector('use').getAttribute('href')).innerHTML}</svg>` }));
+  const addSvg = `<svg viewBox="0 0 24 24" fill="currentColor">${$('#i-search').innerHTML}</svg>`;
+  const bar = g.balk({ onNav: id => go(id === 'add' ? 'search' : id), onStop: () => document.documentElement.classList.remove('glisse'), z: 21 });
+  document.documentElement.classList.add('glisse');
+  const sync = () => {
+    const p = $('.mnav-pill').getBoundingClientRect(), a = $('.mnav-add').getBoundingClientRect();
+    const dark = getComputedStyle(document.documentElement).colorScheme !== 'light';
+    bar.update({ pill: { x: p.left, y: p.top, w: p.width, h: p.height }, add: { x: a.left, y: a.top, w: a.width, h: a.height }, tabs, active: cur?.where, dark, visible: $('#lyrics-full').hidden && !S.panel, addSvg, addLabel: 'Zoeken' });
+  };
+  setupGlisse.sync = sync;
+  sync();
+  addEventListener('resize', sync);
+}
+const glisseSync = () => setupGlisse.sync?.();
+
 // Vloeiend: elk beeldje bijwerken zolang het venster zichtbaar is, anders rustig.
 (function frame() { tick(); document.hidden ? setTimeout(frame, 1000) : requestAnimationFrame(frame); })();
 

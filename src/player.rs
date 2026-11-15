@@ -271,7 +271,8 @@ async fn connect(st: &mut State, browser: bool) -> bool {
     let device = settings::get("device").as_str().filter(|d| !d.is_empty()).map(String::from);
     // 32-bit float naar de uitgang: geen afronding tussendoor.
     let player = Player::new(player_config, session.clone(), mixer.get_soft_volume(), move || {
-        Box::new(crate::dsp::DspSink::new(sink(device.clone(), AudioFormat::F32))) as Box<dyn librespot::playback::audio_backend::Sink>
+        let device = device.clone();
+        Box::new(crate::dsp::DspSink::new(Box::new(move || sink(device.clone(), AudioFormat::F32)))) as Box<dyn librespot::playback::audio_backend::Sink>
     });
     let events = player.get_player_event_channel();
     let volume = if bp { u16::MAX } else { settings::get("volume").as_u64().map(|v| v as u16).unwrap_or(u16::MAX / 2) };

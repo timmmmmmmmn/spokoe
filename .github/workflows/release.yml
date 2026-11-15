@@ -17,3 +17,22 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: target/Spokoe.zip
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Spokoe.exe bouwen
+        working-directory: windows
+        run: cargo build --release
+      - name: Inpakken
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force Spokoe | Out-Null
+          Copy-Item windows/target/release/Spokoe.exe Spokoe/
+          Compress-Archive -Path Spokoe/* -DestinationPath Spokoe-windows.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Spokoe-windows.zip

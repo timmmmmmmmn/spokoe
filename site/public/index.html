@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spokoe — Spotify, maar dan van jou</title>
+<meta name="description" content="Spokoe is een snelle, mooie Spotify-speler voor Mac, Windows en Android. Slimme mixen, equalizer, echte crossfade, songteksten en vinyl-thema's. Spotify Premium nodig.">
+<meta name="theme-color" content="#0a0f3f">
+<meta property="og:title" content="Spokoe">
+<meta property="og:description" content="Spotify, maar dan sneller, mooier en van jou. Voor Mac, Windows en Android.">
+<meta property="og:image" content="https://spokoe.timvanbergen.nl/img/home.jpg">
+<link rel="icon" href="/img/icon.png">
+<style>
+  :root {
+    --navy: #0b1482; --bg: #070b30; --bg2: #0a0f3f; --surface: rgba(255,255,255,.05); --line: rgba(255,255,255,.10);
+    --ink: #f3f5ff; --dim: #aeb4dc; --faint: #6f77ad; --lime: #a3ec55;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); overflow-x: hidden;
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  img { display: block; max-width: 100%; }
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+
+  /* gloed op de achtergrond */
+  .glow { position: absolute; z-index: -1; border-radius: 50%; filter: blur(120px); opacity: .55; pointer-events: none; }
+  .glow.a { width: 640px; height: 640px; background: var(--navy); top: -200px; left: -160px; }
+  .glow.b { width: 520px; height: 520px; background: #3d5bd8; top: 80px; right: -220px; opacity: .35; }
+  .glow.c { width: 420px; height: 420px; background: var(--lime); top: 520px; left: 40%; opacity: .12; }
+
+  nav.top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); background: rgba(7,11,48,.6); border-bottom: 1px solid var(--line); }
+  nav.top .wrap { display: flex; align-items: center; gap: 12px; height: 64px; }
+  nav.top img { width: 34px; height: 34px; border-radius: 9px; }
+  nav.top b { font-size: 19px; letter-spacing: -.01em; }
+  nav.top .links { margin-left: auto; display: flex; gap: 22px; font-size: 15px; color: var(--dim); }
+  nav.top .links a { text-decoration: none; }
+  nav.top .links a:hover { color: var(--ink); }
+
+  header.hero { position: relative; isolation: isolate; text-align: center; padding: 90px 0 40px; }
+  .hero .icon { width: 128px; height: 128px; margin: 0 auto 26px; filter: drop-shadow(0 24px 50px rgba(0,0,0,.55)); }
+  .hero h1 { font-size: clamp(54px, 10vw, 104px); line-height: .95; letter-spacing: -.045em; margin: 0 0 18px; font-weight: 850; }
+  .hero h1 span { color: var(--lime); }
+  .hero p.lead { font-size: clamp(19px, 2.4vw, 23px); color: var(--dim); max-width: 680px; margin: 0 auto 36px; }
+
+  .downloads { display: flex; justify-content: center; flex-wrap: wrap; gap: 14px; }
+  .dl {
+    display: flex; align-items: center; gap: 14px; min-width: 230px; padding: 14px 22px 14px 18px; border-radius: 18px;
+    text-decoration: none; background: var(--surface); border: 1px solid var(--line);
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); transition: transform .15s, background .15s, border-color .15s;
+  }
+  .dl:hover { transform: translateY(-2px); background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.2); }
+  .dl.main { background: var(--lime); color: var(--navy); border-color: transparent; box-shadow: 0 16px 40px rgba(163,236,85,.25); }
+  .dl.main:hover { background: #b4f36c; }
+  .dl svg { width: 30px; height: 30px; flex: none; fill: currentColor; }
+  .dl small { display: block; font-size: 12.5px; opacity: .75; line-height: 1.2; }
+  .dl strong { display: block; font-size: 17px; line-height: 1.25; }
+  .hero .req { color: var(--faint); font-size: 14px; margin-top: 18px; }
+
+  .window { margin: 64px auto 0; max-width: 1100px; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 50px 120px rgba(0,0,0,.6), 0 0 0 1px rgba(0,0,0,.4); background: var(--bg2); }
+  .window .bar { height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid var(--line); }
+  .window .bar i { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+  .window .bar i:nth-child(2) { background: #febc2e; } .window .bar i:nth-child(3) { background: #28c840; }
+
+  section.feature { display: grid; grid-template-columns: 1fr 1.35fr; gap: 64px; align-items: center; padding: 110px 0 0; }
+  section.feature.flip .text { order: 2; }
+  .kicker { color: var(--lime); font-weight: 700; font-size: 13.5px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 12px; }
+  h2 { font-size: clamp(32px, 4.4vw, 46px); line-height: 1.08; letter-spacing: -.03em; margin: 0 0 18px; }
+  .text p { color: var(--dim); margin: 0 0 16px; }
+  .text ul { list-style: none; padding: 0; margin: 20px 0 0; color: var(--dim); }
+  .text li { padding: 7px 0 7px 30px; position: relative; }
+  .text li::before { content: ""; position: absolute; left: 0; top: 13px; width: 16px; height: 16px; border-radius: 50%; background: radial-gradient(circle, var(--lime) 0 30%, #000 32% 100%); }
+  .shot { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 34px 90px rgba(0,0,0,.55); }
+
+  .devices { position: relative; display: flex; align-items: flex-end; justify-content: center; gap: 0; }
+  .devices .tablet { width: 82%; border-radius: 22px; overflow: hidden; border: 8px solid #111; box-shadow: 0 34px 90px rgba(0,0,0,.55); }
+  .devices .phone { width: 30%; margin-left: -12%; margin-bottom: -24px; border-radius: 30px; overflow: hidden; border: 7px solid #111; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  .phones { display: flex; gap: 18px; justify-content: center; }
+  .phones img { width: 46%; border-radius: 30px; border: 7px solid #111; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  .phones img:last-child { margin-top: 60px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 40px; }
+  .card { padding: 24px; border-radius: 20px; background: var(--surface); border: 1px solid var(--line); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+  .card h3 { margin: 12px 0 6px; font-size: 18px; letter-spacing: -.01em; }
+  .card p { margin: 0; color: var(--dim); font-size: 15px; }
+  .card .ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: rgba(163,236,85,.12); color: var(--lime); }
+  .card .ic svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .center { text-align: center; }
+  .center p.sub { color: var(--dim); max-width: 640px; margin: 0 auto; }
+
+  .signal { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .signal span { padding: 8px 14px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 14px; color: var(--dim); }
+  .signal span b { color: var(--ink); }
+
+  .install { margin: 110px 0 0; padding: 44px; border-radius: 26px; background: linear-gradient(140deg, rgba(11,20,130,.55), rgba(255,255,255,.03)); border: 1px solid var(--line); }
+  .install .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 24px; }
+  .install h3 { margin: 0 0 8px; font-size: 18px; display: flex; align-items: center; gap: 10px; }
+  .install h3 svg { width: 22px; height: 22px; fill: currentColor; }
+  .install p, .install ol { color: var(--dim); font-size: 15px; margin: 0; }
+  .install ol { padding-left: 20px; }
+  .install a.btn { display: inline-block; margin-top: 14px; padding: 9px 18px; border-radius: 999px; background: var(--lime); color: var(--navy); font-weight: 700; text-decoration: none; font-size: 15px; }
+
+  footer { margin-top: 110px; padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; justify-content: space-between; }
+
+  @media (max-width: 860px) {
+    nav.top .links { display: none; }
+    section.feature { grid-template-columns: 1fr; gap: 32px; padding-top: 80px; }
+    section.feature.flip .text { order: 0; }
+    .grid, .install .cols { grid-template-columns: 1fr; }
+    .install { padding: 28px; }
+    .dl { min-width: 0; width: 100%; max-width: 360px; }
+  }
+</style>
+</head>
+<body>
+<nav class="top"><div class="wrap">
+  <img src="/img/icon.png" alt=""><b>Spokoe</b>
+  <div class="links"><a href="#mix">Mixen</a><a href="#geluid">Geluid</a><a href="#overal">Telefoon en tablet</a><a href="#installeren">Installeren</a><a href="https://github.com/timmmmmmmmn/spokoe">GitHub</a></div>
+</div></nav>
+
+<header class="hero">
+  <div class="glow a"></div><div class="glow b"></div><div class="glow c"></div>
+  <div class="wrap">
+    <img class="icon" src="/img/icon.png" alt="Het Spokoe-icoon: een platenspeler">
+    <h1>Spokoe<span>.</span></h1>
+    <p class="lead">Spotify, maar dan sneller, mooier en van jou. Een eigen speler met slimme mixen, een equalizer, echte crossfade en songteksten die meelopen.</p>
+    <div class="downloads">
+      <a class="dl main" href="/download/mac" id="dl-mac">
+        <svg viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8s1.9.8 3.2.8c1.3 0 2.1-1.2 2.9-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.4-1-2.4-3.9zM14 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4z"/></svg>
+        <span><small>Download voor</small><strong>Mac</strong></span>
+      </a>
+      <a class="dl" href="/download/windows" id="dl-win">
+        <svg viewBox="0 0 24 24"><path d="M3 5.5 10.5 4.5v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg>
+        <span><small>Download voor</small><strong>Windows</strong></span>
+      </a>
+      <a class="dl" href="/download/android" id="dl-android">
+        <svg viewBox="0 0 24 24"><path d="M17.6 9.5 19.5 6.3a.4.4 0 0 0-.7-.4l-1.9 3.3A11.7 11.7 0 0 0 12 8.2c-1.8 0-3.4.4-4.9 1L5.2 5.9a.4.4 0 1 0-.7.4l1.9 3.2A10.5 10.5 0 0 0 1 18h22a10.5 10.5 0 0 0-5.4-8.5zM7 15.3a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm10 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>
+        <span><small>Download voor</small><strong>Android</strong></span>
+      </a>
+    </div>
+    <p class="req">Gratis. Werkt met je Spotify Premium-account. Werkt zichzelf bij.</p>
+    <div class="window"><div class="bar"><i></i><i></i><i></i></div><img src="/img/home.jpg" alt="Spokoe op de Mac: Home met snelle tegels, Gemaakt voor jou en onlangs gespeeld" width="1800" height="983"></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="feature" id="mix">
+    <div class="text">
+      <div class="kicker">Slimmer doorspelen</div>
+      <h2>Na één nummer speelt het gewoon goed verder.</h2>
+      <p>Start je een los nummer of een artiest, dan maakt Spokoe er een mix bij: met Spotify's eigen radio, gefilterd en gerangschikt op jouw smaak.</p>
+      <ul>
+        <li>Niets wat je de afgelopen dagen al hoorde, geen dubbele of live-versies</li>
+        <li>Nooit twee keer dezelfde artiest kort na elkaar</li>
+        <li>Zelf in te stellen: meer vertrouwd of meer ontdekken</li>
+        <li>Dagmixen, Ontdek wekelijks en een Releaseradar, gemaakt door Spokoe</li>
+      </ul>
+    </div>
+    <div class="shot"><img src="/img/artist.jpg" alt="Een artiestpagina met populaire nummers, artiestenradio en discografie" loading="lazy"></div>
+  </section>
+
+  <section class="feature flip" id="geluid">
+    <div class="text">
+      <div class="kicker">Voor wie goed luistert</div>
+      <h2>Geluid zoals jij het wilt.</h2>
+      <p>Een equalizer met tien banden en voorinstellingen, echte crossfade waarbij nummers overlappen, balans, en podcasts sneller zonder hogere stem.</p>
+      <p>En voor audiofielen, netjes weggestopt tot je het nodig hebt: je eigen DAC als uitgang, een bit-perfect-modus en het hele signaalpad in beeld.</p>
+      <div class="signal"><span><b>320 kbps</b> Ogg Vorbis</span><span><b>32-bit</b> float</span><span><b>44,1 kHz</b> zonder omrekenen</span><span><b>Bit-perfect</b> naar je DAC</span></div>
+    </div>
+    <div class="shot"><img src="/img/audio.jpg" alt="De equalizer en de instellingen voor audiofielen" loading="lazy"></div>
+  </section>
+
+  <section class="feature">
+    <div class="text">
+      <div class="kicker">Om naar te kijken</div>
+      <h2>Een plaat die uit de hoes rolt.</h2>
+      <p>Albums krijgen hun hoes met een plaat die er half uit rolt, en die meedraait als het album speelt. Kies je een vinyl-thema, dan voelt Spokoe als een platenkast: papier of notenhout, schreefletters en een draaiende plaat in de spelerbalk.</p>
+      <ul>
+        <li>Nu speelt op het hele scherm, met songteksten die meelopen</li>
+        <li>Minispeler die boven alles zweeft, en een eiland bij een nieuw nummer</li>
+        <li>⌘K: zoeken en alles bedienen met het toetsenbord</li>
+      </ul>
+    </div>
+    <div class="shot"><img src="/img/vinyl.jpg" alt="Het thema Vinyl donker met een albumpagina" loading="lazy"></div>
+  </section>
+
+  <section class="feature flip" id="overal">
+    <div class="text">
+      <div class="kicker">Overal hetzelfde</div>
+      <h2>Op je telefoon en tablet net zo mooi.</h2>
+      <p>De Android-app heeft dezelfde kern: dezelfde mixen, equalizer en wachtrij. Op de telefoon met een zwevende glazen navigatie en Nu speelt als vel, op de tablet met een zijbalk en alles in de breedte.</p>
+      <p>Bedienen kan ook vanaf het vergrendelscherm, je koptelefoon, Bluetooth en je horloge (via Spotify Connect).</p>
+    </div>
+    <div class="devices"><img class="tablet" src="/img/tablet-home.jpg" alt="Spokoe op een tablet" loading="lazy"><img class="phone" src="/img/phone-now.jpg" alt="Nu speelt op een telefoon" loading="lazy"></div>
+  </section>
+
+  <section style="padding-top:110px" class="center">
+    <div class="kicker">En verder</div>
+    <h2>Alles wat de officiële app mist.</h2>
+    <p class="sub">Kleine dingen die elke dag fijner zijn.</p>
+    <div class="grid" style="text-align:left">
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 6h12M4 12h12M4 18h8M19 14v7M15.5 17.5h7"/></svg></div><h3>Een echte wachtrij</h3><p>Slepen om te herschikken, weghalen, bewaren als playlist en delen.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 7h3c2 0 3 1 4 2.5l2 4c1 1.5 2 2.5 4 2.5h3M4 17h3c1 0 2-.4 2.7-1M14 8.2c.7-.8 1.7-1.2 3-1.2h3M17 4l3 3-3 3M17 14l3 3-3 3"/></svg></div><h3>Slim shuffelen</h3><p>Echt willekeurig, wat je net hoorde achteraan, en nummers uit te sluiten.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H10l2 2.5h7.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg></div><h3>Mappen en meer</h3><p>Playlists in mappen, vastzetten, samenvoegen, duplicaten opruimen, importeren en exporteren.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9M12 8v4l3 2"/></svg></div><h3>Slaaptimer</h3><p>Zachtjes uitfaden na een paar minuten, of aan het eind van het nummer.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></div><h3>Statistieken</h3><p>Je toppers per maand of altijd, en je luistertijd per dag.</p></div>
+      <div class="card"><div class="ic"><svg viewBox="0 0 24 24"><path d="M5 12a7 7 0 0 1 14 0M8.5 12a3.5 3.5 0 0 1 7 0M12 12v.01"/></svg></div><h3>Blijft verbonden</h3><p>Na slaapstand of een haperend netwerk verbindt Spokoe zelf opnieuw en speelt verder.</p></div>
+    </div>
+  </section>
+
+  <section class="install" id="installeren">
+    <h2 style="margin:0">Installeren</h2>
+    <div class="cols">
+      <div>
+        <h3><svg viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8s1.9.8 3.2.8c1.3 0 2.1-1.2 2.9-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.4-1-2.4-3.9zM14 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1.1.1 2.1-.6 2.8-1.4z"/></svg>Mac</h3>
+        <ol><li>Pak de zip uit en zet Spokoe in Apps.</li><li>De eerste keer: Systeeminstellingen › Privacy en beveiliging › Toch openen.</li><li>Log in met Spotify.</li></ol>
+        <p style="margin-top:8px">macOS 13 of nieuwer, Apple silicon.</p>
+        <a class="btn" href="/download/mac">Download voor Mac</a>
+      </div>
+      <div>
+        <h3><svg viewBox="0 0 24 24"><path d="M3 5.5 10.5 4.5v7H3zM11.5 4.4 21 3v8.5h-9.5zM3 12.5h7.5v7L3 18.5zM11.5 12.5H21V21l-9.5-1.4z"/></svg>Windows</h3>
+        <ol><li>Pak de zip uit, bijvoorbeeld in je map Programma's.</li><li>Start Spokoe.exe. Zegt Windows "onbekende uitgever", kies Meer info › Toch uitvoeren.</li><li>Log in met Spotify.</li></ol>
+        <p style="margin-top:8px">Windows 10 of 11.</p>
+        <a class="btn" href="/download/windows">Download voor Windows</a>
+      </div>
+      <div>
+        <h3><svg viewBox="0 0 24 24"><path d="M17.6 9.5 19.5 6.3a.4.4 0 0 0-.7-.4l-1.9 3.3A11.7 11.7 0 0 0 12 8.2c-1.8 0-3.4.4-4.9 1L5.2 5.9a.4.4 0 1 0-.7.4l1.9 3.2A10.5 10.5 0 0 0 1 18h22a10.5 10.5 0 0 0-5.4-8.5zM7 15.3a1 1 0 1 1 0-2 1 1 0 0 1 0 2zm10 0a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>Android</h3>
+        <ol><li>Download de APK op je telefoon of tablet en open hem.</li><li>Sta toe dat je browser apps installeert.</li><li>Log in met Spotify.</li></ol>
+        <p style="margin-top:8px">Android 8 of nieuwer.</p>
+        <a class="btn" href="/download/android">Download voor Android</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer><div class="wrap">
+  <span>Spokoe is een privéproject van <a href="https://timvanbergen.nl">Tim van Bergen</a> en is niet verbonden aan Spotify. Spotify Premium nodig.</span>
+  <span><a href="https://github.com/timmmmmmmmn/spokoe">Broncode op GitHub</a></span>
+</div></footer>
+</body>
+</html>

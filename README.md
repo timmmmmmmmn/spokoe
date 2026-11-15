@@ -1,6 +1,6 @@
 # Spokoe
 
-Een eigen, snelle Spotify-speler voor de Mac en Android (Spotify Premium nodig).
+Een eigen, snelle Spotify-speler voor Mac, Windows en Android (Spotify Premium nodig). Site: https://spokoe.timvanbergen.nl
 De kern is Rust ([librespot](https://github.com/librespot-org/librespot)): Spokoe speelt zelf af
 en is een Spotify Connect-apparaat. De interface is één gedeelde pagina (`ui/`).
 
@@ -15,8 +15,10 @@ en is een Spotify Connect-apparaat. De interface is één gedeelde pagina (`ui/`
 ## Bouwen
 - **Mac:** `./install.sh` (zet Spokoe.app in /Applications)
 - **Android:** `android/build.sh` (Rust-kern via cargo-ndk, daarna de APK)
+- **Windows:** `cd windows && cargo build --release` (op Windows; WebView2, Mica, mediapaneel)
+- **Site:** `cd site && npx wrangler deploy` (spokoe.timvanbergen.nl)
 
-Releases: een tag `v*` maakt een Mac-zip, een push naar `main` een Android-APK. Beide apps
+Releases: een tag `v*` maakt een Mac-zip en een Windows-zip, een push naar `main` een Android-APK. Beide apps
 werken zichzelf bij vanaf de releases in deze repo.
 
 Spokoe is een privéproject en niet verbonden aan Spotify.

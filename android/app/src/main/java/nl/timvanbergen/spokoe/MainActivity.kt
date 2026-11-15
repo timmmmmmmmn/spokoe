@@ -63,7 +63,12 @@ class MainActivity : ComponentActivity() {
         window.statusBarColor = Color.TRANSPARENT
         @Suppress("DEPRECATION")
         window.navigationBarColor = Color.TRANSPARENT
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+            // Geen grijze/blauwe laag achter de statusbalk: de pagina (en Nu speelt) loopt door tot boven.
+            @Suppress("DEPRECATION")
+            window.isStatusBarContrastEnforced = false
+        }
         // De volumeknoppen regelen de muziek.
         volumeControlStream = AudioManager.STREAM_MUSIC
 
@@ -92,6 +97,24 @@ class MainActivity : ComponentActivity() {
         }
         web.addJavascriptInterface(Bridge(), "SpokoeAndroid")
         web.webViewClient = object : WebViewClient() {
+            // Bestanden naast de pagina (zoals lib/glisse.js) komen uit de app zelf.
+            override fun shouldInterceptRequest(view: WebView, req: WebResourceRequest): android.webkit.WebResourceResponse? {
+                val url = req.url
+                if (url.host != "spokoe.app") return null
+                val path = url.path?.trimStart('/') ?: return null
+                val mime = when {
+                    path.endsWith(".js") -> "text/javascript"
+                    path.endsWith(".css") -> "text/css"
+                    path.endsWith(".png") -> "image/png"
+                    else -> "application/octet-stream"
+                }
+                return try {
+                    android.webkit.WebResourceResponse(mime, "utf-8", assets.open(path)).apply {
+                        responseHeaders = mapOf("Access-Control-Allow-Origin" to "*")
+                    }
+                } catch (_: Exception) { null }
+            }
+
             // Links naar buiten (Spotify, songteksten) in de browser.
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
                 openOutside(req.url.toString())
@@ -152,7 +175,7 @@ class MainActivity : ComponentActivity() {
     private var insets = 0f to 0f
     private fun pushInsets(top: Float, bottom: Float) {
         insets = top to bottom
-        web.evaluateJavascript("document.documentElement.style.setProperty('--safe-top','${top}px');document.documentElement.style.setProperty('--safe-bottom','${bottom}px')", null)
+        web.evaluateJavascript("var d=document.documentElement;d&&(d.style.setProperty('--safe-top','${top}px'),d.style.setProperty('--safe-bottom','${bottom}px'))", null)
     }
 
     private fun onEvent(msg: JSONObject, text: String) {
