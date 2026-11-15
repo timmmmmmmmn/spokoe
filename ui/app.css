@@ -443,3 +443,5 @@ body.mini #seek span { width: 32px; font-size: 10.5px; }
 body.mini #extra { display: none; }
 body.mini #b-big { display: grid; position: fixed; top: 4px; right: 6px; width: 26px; height: 26px; }
 body.mini #b-big svg { width: 14px; height: 14px; }
+.ph.art { display: grid; place-items: center; background: linear-gradient(140deg, hsl(var(--h) 55% 42%), hsl(calc(var(--h) + 50) 60% 22%)) !important; color: rgba(255,255,255,.85); }
+.ph.art svg { width: 40%; height: 40%; }

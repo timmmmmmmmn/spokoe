@@ -50,8 +50,16 @@ fn run_js(web: &WKWebView, js: &str) {
     unsafe { web.evaluateJavaScript_completionHandler(&NSString::from_str(js), None) };
 }
 
+/// De laatste status (ingelogd, verbinden…): opnieuw naar een vers geladen pagina.
+static LAST_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Een bericht naar de pagina (vanaf elke thread).
 pub fn send(msg: Value) {
+    if msg["type"] == "status" {
+        if let Ok(mut last) = LAST_STATUS.lock() {
+            *last = Some(msg.to_string());
+        }
+    }
     let js = format!("window.spotimfy&&spotimfy.recv({msg})");
     dispatch2::DispatchQueue::main().exec_async(move || {
         with_ui(|ui| {
@@ -106,6 +114,11 @@ fn handle(text: &str) {
                     run_js(&web, &js);
                 }
             }
+            if let Some(status) = LAST_STATUS.lock().ok().and_then(|l| l.clone()) {
+                if let Ok(v) = serde_json::from_str(&status) {
+                    send(v);
+                }
+            }
             send(json!({
                 "type": "config",
                 "clientId": crate::settings::get("clientId"),
@@ -149,6 +162,7 @@ fn handle(text: &str) {
             pb.setString_forType(&NSString::from_str(msg["text"].as_str().unwrap_or("")), unsafe { NSPasteboardTypeString });
         }
         "show" => show_window(),
+        "log" => log::warn!("pagina: {}", msg["msg"].as_str().unwrap_or("")),
         "mini" => set_mini(msg["on"].as_bool().unwrap_or(false)),
         "island" => crate::settings::set("island", msg["on"].clone()),
         _ => {}
@@ -247,6 +261,26 @@ define_class!(
     unsafe impl NSObjectProtocol for Host {}
 
     unsafe impl NSApplicationDelegate for Host {
+        /// Rechtsklik op het Dock-icoon.
+        #[unsafe(method(applicationDockMenu:))]
+        fn dock_menu(&self, _app: &NSApplication) -> *mut NSMenu {
+            let mtm = MainThreadMarker::new().unwrap();
+            let none = NSEventModifierFlags::empty();
+            let menu = NSMenu::new(mtm);
+            if let Some(now) = with_ui(|ui| ui.now.title()) {
+                let line = plain(mtm, &now.to_string(), None, "");
+                line.setEnabled(false);
+                menu.addItem(&line);
+            }
+            let playing = with_ui(|ui| ui.toggle.title().to_string()).unwrap_or_else(|| "Speel af".into());
+            menu.addItem(&item(mtm, self, &playing, "toggle", "", none));
+            menu.addItem(&item(mtm, self, "Volgende", "next", "", none));
+            menu.addItem(&item(mtm, self, "Vorige", "prev", "", none));
+            menu.addItem(&item(mtm, self, "Vind ik leuk", "like", "", none));
+            menu.addItem(&item(mtm, self, "Minispeler", "mini", "", none));
+            Retained::autorelease_return(menu)
+        }
+
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
             show_window();
@@ -390,6 +424,7 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
     unsafe { reload.setTarget(Some(host)) };
     submenu(mtm, &bar, "Weergave", vec![
         item(mtm, host, "Zoeken", "search", "k", cmd),
+        item(mtm, host, "Zoek in deze lijst", "find", "f", cmd),
         item(mtm, host, "Home", "home", "1", cmd),
         item(mtm, host, "Bibliotheek", "library", "2", cmd),
         item(mtm, host, "Statistieken", "stats", "3", cmd),
@@ -496,6 +531,8 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
     unsafe { content.addScriptMessageHandler_name(ProtocolObject::from_ref(host), ns_string!("spotimfy")) };
     // Geluid uit de pagina (voorbeeldjes) mag zonder eerst te klikken.
     unsafe { config.setMediaTypesRequiringUserActionForPlayback(objc2_web_kit::WKAudiovisualMediaTypes::None) };
+    // Niet afremmen als het venster achter een ander ligt: timers (slaaptimer, tijdbalk) moeten doorlopen.
+    unsafe { config.preferences().setInactiveSchedulingPolicy(objc2_web_kit::WKInactiveSchedulingPolicy::None) };
     let web = unsafe { WKWebView::initWithFrame_configuration(WKWebView::alloc(mtm), frame, &config) };
     web.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable);
     unsafe {

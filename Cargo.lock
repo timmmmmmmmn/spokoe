@@ -2935,6 +2935,7 @@ version = "0.1.0"
 dependencies = [
  "block2",
  "dispatch2",
+ "env_logger",
  "futures",
  "librespot",
  "librespot-oauth",

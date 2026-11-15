@@ -220,6 +220,21 @@ async fn handle(st: &mut State, cmd: Cmd) {
             status("needs-login", json!({}));
         }
         Cmd::Token { id } => {
+            // Zonder eigen Client ID: het login5-token van de sessie, op de achtergrond (nooit de rest ophouden).
+            let client_id = settings::get("clientId").as_str().unwrap_or("").trim().to_string();
+            if client_id.is_empty() {
+                let Some(live) = &st.live else { return ui::send(json!({ "type": "token", "id": id, "error": "niet ingelogd" })) };
+                let session = live.session.clone();
+                tokio::spawn(async move {
+                    let got = tokio::time::timeout(Duration::from_secs(15), session.login5().auth_token()).await;
+                    ui::send(match got {
+                        Ok(Ok(t)) => json!({ "type": "token", "id": id, "token": t.access_token, "expires": now_ms() + t.expires_in.as_millis() as u64 }),
+                        Ok(Err(e)) => json!({ "type": "token", "id": id, "error": e.to_string() }),
+                        Err(_) => json!({ "type": "token", "id": id, "error": "token duurt te lang" }),
+                    });
+                });
+                return;
+            }
             let reply = match token(st).await {
                 Ok((token, secs)) => json!({ "type": "token", "id": id, "token": token, "expires": now_ms() + secs * 1000 }),
                 Err(e) => json!({ "type": "token", "id": id, "error": e }),
@@ -288,10 +303,11 @@ fn load_request(req: &Value) -> Option<LoadRequest> {
         start_playing: true,
         seek_to: req["position"].as_u64().unwrap_or(0) as u32,
         context_options: Some(LoadContextOptions::Options(Options { shuffle, ..Options::default() })),
-        playing_track: if let Some(uri) = req["uri"].as_str() {
-            Some(PlayingTrack::Uri(uri.into()))
+        // Liever de plek in de lijst: een nummer-ID kan in de context een andere versie zijn.
+        playing_track: if let Some(i) = req["index"].as_u64() {
+            Some(PlayingTrack::Index(i as u32))
         } else {
-            req["index"].as_u64().map(|i| PlayingTrack::Index(i as u32))
+            req["uri"].as_str().map(|uri| PlayingTrack::Uri(uri.into()))
         },
     };
     if let Some(context) = req["context"].as_str() {
@@ -306,10 +322,6 @@ async fn token(st: &mut State) -> Result<(String, u64), String> {
     let Some(live) = &st.live else { return Err("niet ingelogd".into()) };
     let scopes = SCOPES.join(",");
     let client_id = settings::get("clientId").as_str().unwrap_or("").trim().to_string();
-    if client_id.is_empty() {
-        let t = live.session.token_provider().get_token(&scopes).await.map_err(|e| e.to_string())?;
-        return Ok((t.access_token, t.expires_in.as_secs()));
-    }
     if let Some(api) = &st.api {
         if let Ok(left) = api.expires.duration_since(SystemTime::now()) {
             if left > Duration::from_secs(60) {
@@ -318,7 +330,8 @@ async fn token(st: &mut State) -> Result<(String, u64), String> {
         }
     }
     // Eerst stil via de sessie; lukt dat niet, dan met de refresh-token of eenmalig via de browser.
-    if let Ok(t) = live.session.token_provider().get_token_with_client_id(&scopes, &client_id).await {
+    let quick = live.session.token_provider().get_token_with_client_id(&scopes, &client_id);
+    if let Ok(Ok(t)) = tokio::time::timeout(Duration::from_secs(4), quick).await {
         return Ok((t.access_token, t.expires_in.as_secs()));
     }
     let refresh = settings::get("refresh").as_str().map(String::from);
@@ -364,7 +377,13 @@ async fn forward_events(mut events: librespot::playback::player::PlayerEventChan
                 let item = *audio_item;
                 let (artists, album) = match &item.unique_fields {
                     UniqueFields::Track { artists, album, .. } => (
-                        artists.iter().map(|a| json!({ "name": a.name, "uri": a.id.to_uri().unwrap_or_default() })).collect(),
+                        artists
+                            .iter()
+                            .map(|a| {
+                                let uri = a.id.to_uri().unwrap_or_default();
+                                json!({ "name": a.name, "id": uri.rsplit(':').next(), "uri": uri })
+                            })
+                            .collect(),
                         album.clone(),
                     ),
                     UniqueFields::Episode { show_name, .. } => (vec![json!({ "name": show_name })], String::new()),

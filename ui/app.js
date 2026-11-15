@@ -2,6 +2,9 @@
 // Spotimfy: de interface. Afspelen gebeurt in de Rust-kern (post → webkit), bibliotheek en zoeken
 // via de Web API (rechtstreeks met fetch, met een token van de kern).
 
+// Fouten in de pagina naar het log van de app.
+addEventListener('error', e => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd: 'log', msg: `${e.message} (regel ${e.lineno})` })));
+addEventListener('unhandledrejection', e => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd: 'log', msg: 'promise: ' + (e.reason?.message || e.reason) })));
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -162,9 +165,12 @@ function pic(images, size = 300) {
   const sorted = [...images].filter(i => i?.url).sort((a, b) => (a.width || 640) - (b.width || 640));
   return (sorted.find(i => (i.width || 640) >= size) || sorted[sorted.length - 1])?.url || '';
 }
-const img = (images, size, cls = '') => {
+const img = (images, size, cls = '', name = '') => {
   const u = pic(images, size);
-  return u ? `<img src="${esc(u)}" class="${cls}" loading="lazy" alt="">` : `<div class="ph ${cls}"></div>`;
+  if (u) return `<img src="${esc(u)}" class="${cls}" loading="lazy" alt="">`;
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return `<div class="ph art ${cls}" style="--h:${h}">${icon('note')}</div>`;
 };
 
 /** Een nummer uit de Web API naar een vaste vorm. */
@@ -180,6 +186,36 @@ function norm(t, album) {
     duration: t.duration_ms, explicit: t.explicit, playable: t.is_playable !== false && !t.is_local,
   };
 }
+
+const coreLists = new Map();
+/** De inhoud van een playlist via de kern (vijf minuten onthouden). */
+function corePlaylist(id) {
+  const hit = coreLists.get(id);
+  if (hit && Date.now() - hit.t < 300000) return hit.p;
+  const p = rpc('meta', { kind: 'playlist', arg: id }).then(r => r.data.tracks);
+  coreLists.set(id, { t: Date.now(), p });
+  p.catch(() => coreLists.delete(id));
+  return p;
+}
+
+/** Even met de muis op een playlist, album of artiest: alvast ophalen, zodat klikken meteen is. */
+let hoverT = null;
+document.addEventListener('mouseover', e => {
+  const el = e.target.closest?.('[data-go]');
+  clearTimeout(hoverT);
+  if (!el || !S.ready) return;
+  hoverT = setTimeout(() => {
+    const [kind, id] = [el.dataset.go.slice(0, el.dataset.go.indexOf(':')), el.dataset.go.slice(el.dataset.go.indexOf(':') + 1)];
+    if (kind === 'playlist') {
+      soft(get(`/playlists/${id}`, 120000)).then(p => {
+        if (!p) return;
+        if (p.owner?.id === S.me?.id) soft(get(`/playlists/${id}/items?limit=50`, 120000));
+        else soft(corePlaylist(id));
+      });
+    } else if (kind === 'album') soft(get(`/albums/${id}`, 3600000));
+    else if (kind === 'artist') { soft(get(`/artists/${id}`, 3600000)); soft(get(`/artists/${id}/albums?include_groups=album,single&limit=10`, 3600000)); }
+  }, 120);
+});
 
 const withAdded = (t, x) => t && (x?.added_at ? { ...t, added: Date.parse(x.added_at) } : t);
 
@@ -226,6 +262,7 @@ function onRemote(cmd, ms) {
     stopafter: () => { S.stopAfter = !S.stopAfter; toast(S.stopAfter ? 'Stopt na dit nummer' : 'Speelt gewoon door'); },
     sleep: () => sleepMenu($('#b-sleep')),
     mini: () => toggleMini(),
+    find: () => { const f = $('#c-filter') || $('#lib-filter') || $('#s-in'); f ? (f.focus(), f.select()) : openPalette(); },
     nowplaying: () => $('#lyrics-full').hidden ? openLyricsFull() : ($('#lyrics-full').hidden = true),
   };
   acts[cmd]?.();
@@ -255,7 +292,11 @@ function onTrack(t, local) {
     // Volledige gegevens (album-id, artiest-id's) via de Web API.
     if (local && t.uri.startsWith('spotify:track:')) {
       soft(get(`/tracks/${idOf(t.uri)}`, 3600000)).then(full => {
-        if (full && S.track?.uri === t.uri) { S.track = { ...norm(full), album: { ...norm(full).album, images: full.album?.images?.length ? full.album.images : t.album.images } }; renderTrack(); }
+        // Alleen de id's van album en artiesten overnemen; naam en hoes van wat echt speelt blijven.
+        if (!full || S.track?.uri !== t.uri) return;
+        const n = norm(full);
+        S.track = { ...t, artists: t.artists.map((a, i) => ({ ...a, id: a.id || n.artists.find(x => x.name === a.name)?.id || n.artists[i]?.id })), album: { ...t.album, id: n.album.id, images: t.album.images.length ? t.album.images : n.album.images } };
+        renderTrack();
       });
     }
   }
@@ -360,8 +401,21 @@ $('#lf-prev').onclick = () => $('#b-prev').onclick();
 /** Niets geladen en op ▶︎ gedrukt: verder waar je was, of je favorieten. */
 async function resumeSomething() {
   const last = store.get('last', null);
-  if (last?.context) play({ context: last.context, uri: last.uri, position: last.position || 0 });
+  if (last?.context) resumeAt(last.context, last.track || { uri: last.uri, name: '', artists: [] }, last.position || 0);
   else play({ context: `spotify:user:${S.user}:collection` });
+}
+
+/** Een context weer starten bij een bepaald nummer: de plek zoeken (de ID kan een andere versie zijn). */
+async function resumeAt(context, track, position = 0) {
+  S.ctx = context;
+  let list = null;
+  const [, kind, id] = context.split(':');
+  try {
+    if (kind === 'playlist') list = await corePlaylist(id);
+    else if (kind === 'album') list = (await get(`/albums/${id}`)).tracks.items.map(t => norm(t));
+  } catch {}
+  const index = list ? list.findIndex(t => sameSong(t, track)) : -1;
+  play(index >= 0 ? { context, index, position } : { context, uri: track.uri, position });
 }
 
 function tick() {
@@ -369,7 +423,8 @@ function tick() {
   const f = S.dur ? Math.min(1, pos / S.dur) : 0;
   $('#seek-bar .fill').style.width = f * 100 + '%';
   $('#seek-bar .knob').style.left = f * 100 + '%';
-  $('#t-pos').textContent = fmt(pos);
+  const txt = fmt(pos);
+  if ($('#t-pos').textContent !== txt) $('#t-pos').textContent = txt;
   if (!$('#lyrics-full').hidden) {
     $('#lf-seek-bar .fill').style.width = f * 100 + '%';
     $('#lf-seek-bar .knob').style.left = f * 100 + '%';
@@ -378,7 +433,7 @@ function tick() {
   lyricsTick(pos);
   sleepTick();
 }
-setInterval(tick, 250);
+
 
 // Luistertijd bijhouden (voor de statistieken), alleen wat hier speelt.
 setInterval(() => {
@@ -390,7 +445,7 @@ setInterval(() => {
   const a = store.get('artistTime', {});
   for (const ar of S.track.artists.slice(0, 1)) a[ar.name] = (a[ar.name] || 0) + 10;
   store.set('artistTime', a);
-  if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, position: Math.round(position()) });
+  if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists.slice(0, 1) }, position: Math.round(position()) });
 }, 10000);
 
 function remember(t) {
@@ -574,7 +629,12 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
 function playFromList(L, i) {
   const t = L.shown[i];
   if (!t || t.playable === false) return;
-  if (L.ctx?.uri) { S.ctx = L.ctx.uri; play({ context: L.ctx.uri, uri: t.uri }); }
+  if (L.ctx?.uri) {
+    S.ctx = L.ctx.uri;
+    // Op plek in de lijst: de ID die Spotify hier gebruikt kan een andere versie van het nummer zijn.
+    const index = L.ctx.uri.includes(':artist:') ? -1 : L.tracks.indexOf(t);
+    play(index >= 0 ? { context: L.ctx.uri, index, uri: t.uri } : { context: L.ctx.uri, uri: t.uri });
+  }
   else {
     // Losse lijst: alles vanaf hier (en wat ervoor stond achteraan), zoals in de officiële app.
     S.ctx = null;
@@ -792,7 +852,7 @@ async function myPlaylists(fresh) {
 function renderSide(list) {
   $('#side-lists').innerHTML =
     `<button data-go="liked:" data-card="spotify:user:${esc(S.user)}:collection"><div class="ph liked-ph">${icon('heart-on')}</div><span>Nummers die je leuk vindt</span></button>` +
-    list.map(p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64)}<span>${esc(p.name)}</span></button>`).join('');
+    list.map(p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64, '', p.name)}<span>${esc(p.name)}</span></button>`).join('');
 }
 
 let dragged = null;
@@ -838,7 +898,7 @@ function canDrop(b) {
 
 // ——— de pagina's ———
 const card = (o, round) => `<div class="card${round ? ' round' : ''}" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">
-  ${img(o.images, 300, 'cover')}
+  ${img(o.images, 300, 'cover', o.name)}
   ${o.uri && !o.noPlay ? `<button class="play" data-play="${esc(o.uri)}" title="Afspelen">${icon('play')}</button>` : ''}
   <div class="t">${esc(o.name)}</div><div class="s">${esc(o.sub || '')}</div></div>`;
 const albumCard = a => card({ go: 'album:' + a.id, uri: a.uri, images: a.images, name: a.name, sub: `${(a.release_date || '').slice(0, 4)} · ${(a.artists || []).map(x => x.name).join(', ')}` });
@@ -858,16 +918,11 @@ const views = {
       <section id="h-recent"></section><section id="h-top"></section><section id="h-lists"></section><section id="h-albums"></section>`;
     $('#top-title').textContent = 'Home';
     const playlists = myPlaylists.list || store.get('playlists', []);
-    const tiles = list => { $('#h-quick', el).innerHTML = list.slice(0, 8).map(o => `<div class="tile" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">${o.go === 'liked:' ? `<div class="ph liked-ph">${icon('heart-on')}</div>` : img(o.images, 64)}<span>${esc(o.name)}</span><button class="play" data-play="${esc(o.uri)}">${icon('play')}</button></div>`).join(''); };
+    const tiles = list => { $('#h-quick', el).innerHTML = list.slice(0, 8).map(o => `<div class="tile" data-go="${esc(o.go)}" data-card="${esc(o.uri)}">${o.go === 'liked:' ? `<div class="ph liked-ph">${icon('heart-on')}</div>` : img(o.images, 64, '', o.name)}<span>${esc(o.name)}</span><button class="play" data-play="${esc(o.uri)}">${icon('play')}</button></div>`).join(''); };
     const fromLists = playlists.slice(0, 8).map(p => ({ go: 'playlist:' + p.id, uri: p.uri, images: p.images, name: p.name }));
     tiles([{ go: 'liked:', uri: `spotify:user:${S.user}:collection`, images: [], name: 'Nummers die je leuk vindt' }, ...fromLists]);
-    const [recent, top, albums] = await Promise.all([
-      soft(get('/me/player/recently-played?limit=50', 60000)),
-      soft(get('/me/top/artists?time_range=short_term&limit=12', 3600000)),
-      soft(get('/me/albums?limit=20', 600000)),
-    ]);
-    if (!alive()) return;
-    if (recent?.items) recent.items = recent.items.filter(it => it?.track?.album);
+    const fill = ([recent, top, albums]) => {
+    if (recent?.items) recent = { items: recent.items.filter(it => it?.track?.album) };
     if (recent?.items?.length) {
       const seen = new Set(), ctxs = [];
       for (const it of recent.items) {
@@ -887,6 +942,26 @@ const views = {
     if (playlists.length) $('#h-lists', el).innerHTML = `<h2>Jouw playlists <a class="more" data-go="library">Bibliotheek</a></h2><div class="row-scroll">${playlists.slice(0, 20).map(playlistCard).join('')}</div>`;
     const libAlbums = (albums?.items || []).filter(x => x?.album);
     if (libAlbums.length) $('#h-albums', el).innerHTML = `<h2>Albums uit je bibliotheek</h2><div class="row-scroll">${libAlbums.map(x => albumCard(x.album)).join('')}</div>`;
+    };
+    // Eerst wat we de vorige keer hadden (meteen), dan vers van Spotify.
+    const old = store.get('home', null);
+    if (old) fill(old);
+    const fresh = await Promise.all([
+      soft(get('/me/player/recently-played?limit=50', 60000)),
+      soft(get('/me/top/artists?time_range=short_term&limit=12', 3600000)),
+      soft(get('/me/albums?limit=20', 600000)),
+    ]);
+    if (!alive()) return;
+    const scroll = $('#view').scrollTop;
+    fill(fresh);
+    $('#view').scrollTop = scroll;
+    // Klein houden: alleen wat de pagina gebruikt.
+    const slim = ([r, t, a]) => [
+      r && { items: (r.items || []).slice(0, 30).map(it => it?.track && { context: it.context, track: { id: it.track.id, uri: it.track.uri, name: it.track.name, artists: it.track.artists.map(x => ({ name: x.name, id: x.id })), album: { id: it.track.album.id, name: it.track.album.name, images: it.track.album.images.slice(-2) } } }).filter(Boolean) },
+      t && { items: t.items.map(x => ({ id: x.id, uri: x.uri, name: x.name, images: x.images.slice(-2) })) },
+      a && { items: (a.items || []).filter(x => x?.album).map(x => ({ album: { id: x.album.id, uri: x.album.uri, name: x.album.name, release_date: x.album.release_date, artists: x.album.artists.map(y => ({ name: y.name })), images: x.album.images.slice(-2) } })) },
+    ];
+    store.set('home', slim(fresh));
   },
 
   async search(el, q, alive) {
@@ -978,8 +1053,8 @@ const views = {
       try { await playlistItems(id, (_, all) => alive() && L.set(all.map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean))); return; } catch {}
     }
     // Van iemand anders: de Web API geeft de inhoud niet meer, de kern wel.
-    const r = await rpc('meta', { kind: 'playlist', arg: id });
-    if (alive()) L.set(r.data.tracks);
+    const tracks = await corePlaylist(id);
+    if (alive()) L.set(tracks);
   },
 
   async liked(el, _, alive) {
@@ -1099,7 +1174,7 @@ const views = {
 /** De kop + knoppen + nummerlijst van een playlist, album of favorieten. */
 async function collection(el, o, alive) {
   $('#top-title').textContent = o.title;
-  el.innerHTML = `<div class="hero">${o.liked ? `<div class="ph liked-ph" style="width:210px;height:210px;border-radius:12px">${icon('heart-on')}</div>` : img(o.images, 300)}
+  el.innerHTML = `<div class="hero">${o.liked ? `<div class="ph liked-ph" style="width:210px;height:210px;border-radius:12px">${icon('heart-on')}</div>` : img(o.images, 300, '', o.title)}
     <div style="min-width:0"><div class="kind">${esc(o.kind)}</div><h1>${esc(o.title)}</h1>${o.desc ? `<div class="desc">${o.desc.replace(/<[^>]+>/g, '')}</div>` : ''}<div class="meta">${o.meta || ''} <span class="c-count"></span></div></div></div>
     <div class="actions"><button class="big-play" data-ctx="${esc(o.uri)}">${icon('play')}</button>
     <button class="pill" id="c-smart" title="Shuffle die echt husselt, en wat je net hoorde naar achteren schuift">${icon('shuffle')} Slim shuffelen</button>
@@ -1207,7 +1282,8 @@ async function renderQueue() {
     return n ? `<div class="q${now ? ' now' : ''}" data-uri="${esc(n.uri)}">${img(n.album.images, 64)}<div><div class="t">${esc(n.name)}</div><div class="a">${esc(n.artists.map(a => a.name).join(', '))}</div></div></div>` : '';
   };
   if (!q?.currently_playing) { body.innerHTML = '<div class="empty">Speel iets af om de wachtrij te zien.</div>'; return; }
-  body.innerHTML = `<h4>Speelt nu</h4>${row(q.currently_playing, true)}<h4>Hierna</h4>${(q.queue || []).map(t => row(t)).join('') || '<div class="empty">Niets meer</div>'}`;
+  const from = S.ctx && ((myPlaylists.list || []).find(p => p.uri === S.ctx)?.name || $('.hero h1')?.textContent);
+  body.innerHTML = `<h4>Speelt nu${from ? ` · uit ${esc(from)}` : ''}</h4>${row(q.currently_playing, true)}<h4>Hierna</h4>${(q.queue || []).map(t => row(t)).join('') || '<div class="empty">Niets meer</div>'}`;
   const all = [q.currently_playing, ...(q.queue || [])];
   $$('.q', body).forEach((el, i) => { el._track = norm(all[i]); el.ondblclick = () => play({ tracks: [el.dataset.uri] }); });
 }
@@ -1376,7 +1452,8 @@ async function palRun() {
   if (my !== pal.seq) return;
   const r = await soft(get(`/search?q=${encodeURIComponent(q)}&type=track,artist,album,playlist&limit=5`, 600000));
   if (my !== pal.seq || !r) return;
-  const tr = (r.tracks?.items || []).filter(Boolean).map(t => ({ kind: 'Nummers', t: t.name, s: t.artists.map(a => a.name).join(', '), uri: t.uri, images: t.album.images, track: true, go: 'album:' + t.album.id, raw: norm(t) }));
+  const seenT = new Set();
+  const tr = (r.tracks?.items || []).filter(t => t && !seenT.has(t.name.toLowerCase() + t.artists[0]?.name) && seenT.add(t.name.toLowerCase() + t.artists[0]?.name)).map(t => ({ kind: 'Nummers', t: t.name, s: t.artists.map(a => a.name).join(', '), uri: t.uri, images: t.album.images, track: true, go: 'album:' + t.album.id, raw: norm(t) }));
   const ar = (r.artists?.items || []).filter(Boolean).slice(0, 3).map(a => ({ kind: 'Artiesten', t: a.name, s: 'Artiest', uri: a.uri, images: a.images, go: 'artist:' + a.id, round: true }));
   const al = (r.albums?.items || []).filter(Boolean).slice(0, 3).map(a => ({ kind: 'Albums', t: a.name, s: a.artists.map(x => x.name).join(', '), uri: a.uri, images: a.images, go: 'album:' + a.id }));
   const pl = (r.playlists?.items || []).filter(Boolean).slice(0, 3).map(p => ({ kind: 'Playlists', t: p.name, s: p.owner?.display_name || '', uri: p.uri, images: p.images, go: 'playlist:' + p.id }));
@@ -1475,4 +1552,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && S.
 
 renderPlay();
 renderModes();
-post('ready');
+// Vloeiend: elk beeldje bijwerken zolang het venster zichtbaar is, anders rustig.
+(function frame() { tick(); document.hidden ? setTimeout(frame, 1000) : requestAnimationFrame(frame); })();
+
+// Handdruk met de kern: blijven melden tot die antwoordt (het eerste bericht kan verloren gaan).
+(function hello() { if (!S.redirect) { post('ready'); setTimeout(hello, 700); } })();
