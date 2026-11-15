@@ -8,6 +8,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
+    NSAppearanceCustomization,
     NSApplication, NSApplicationDelegate, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSEvent, NSEventModifierFlags,
     NSImage, NSMenu, NSMenuItem, NSPasteboard, NSPasteboardTypeString, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSView,
     NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTitleVisibility, NSWorkspace,
@@ -165,6 +166,16 @@ fn handle(text: &str) {
         "log" => log::warn!("pagina: {}", msg["msg"].as_str().unwrap_or("")),
         "mini" => set_mini(msg["on"].as_bool().unwrap_or(false)),
         "island" => crate::settings::set("island", msg["on"].clone()),
+        "setting" => crate::settings::set(msg["key"].as_str().unwrap_or("x"), msg["value"].clone()),
+        "theme" => {
+            let dark = msg["dark"].as_bool().unwrap_or(true);
+            with_ui(|ui| {
+                let name = unsafe { if dark { objc2_app_kit::NSAppearanceNameDarkAqua } else { objc2_app_kit::NSAppearanceNameAqua } };
+                ui.window.setAppearance(objc2_app_kit::NSAppearance::appearanceNamed(name).as_deref());
+                let (r, g, b) = if dark { (0.059, 0.063, 0.086) } else { (0.969, 0.973, 0.988) };
+                ui.window.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, 1.0)));
+            });
+        }
         _ => {}
     }
 }

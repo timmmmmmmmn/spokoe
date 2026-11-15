@@ -226,6 +226,7 @@ function play(o) { S.local = true; post('play', o); }
 async function ctl(cmd, arg) {
   const here = S.local || !S.remote;
   if (here) {
+    if ((cmd === 'toggle' || cmd === 'resume') && S.resumable) return resumeSomething();
     if (cmd === 'toggle' && !S.track) return;
     if (cmd === 'toggle') { S.pos = position(); S.at = Date.now(); S.playing = !S.playing; renderPlay(); }
     if (cmd === 'seek') { S.pos = arg; S.at = Date.now(); }
@@ -368,6 +369,14 @@ function range(el, onMove, onDone) {
   });
 }
 let seeking = null;
+$('#seek-bar').addEventListener('mousemove', e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  const tip = $('#seek-tip');
+  tip.textContent = fmt(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * S.dur);
+  tip.style.left = e.clientX - r.left + 'px';
+  tip.hidden = !S.dur;
+});
+$('#seek-bar').addEventListener('mouseleave', () => $('#seek-tip').hidden = true);
 range($('#seek-bar'), f => { seeking = f * S.dur; tick(); }, f => { const ms = f * S.dur; seeking = null; ctl('seek', ms); S.pos = ms; S.at = Date.now(); });
 range($('#lf-seek-bar'), f => { seeking = f * S.dur; tick(); }, f => { const ms = f * S.dur; seeking = null; ctl('seek', ms); S.pos = ms; S.at = Date.now(); });
 range($('#vol'), f => { S.volume = f; renderVolume(); }, f => setVolume(f));
@@ -400,6 +409,7 @@ $('#lf-prev').onclick = () => $('#b-prev').onclick();
 
 /** Niets geladen en op ▶︎ gedrukt: verder waar je was, of je favorieten. */
 async function resumeSomething() {
+  S.resumable = false;
   const last = store.get('last', null);
   if (last?.context) resumeAt(last.context, last.track || { uri: last.uri, name: '', artists: [] }, last.position || 0);
   else play({ context: `spotify:user:${S.user}:collection` });
@@ -445,7 +455,7 @@ setInterval(() => {
   const a = store.get('artistTime', {});
   for (const ar of S.track.artists.slice(0, 1)) a[ar.name] = (a[ar.name] || 0) + 10;
   store.set('artistTime', a);
-  if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists.slice(0, 1) }, position: Math.round(position()) });
+  if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists, album: S.track.album, duration: S.track.duration }, position: Math.round(position()) });
 }, 10000);
 
 function remember(t) {
@@ -526,6 +536,7 @@ function go(where, arg, push = true) {
   if (typeof where === 'string' && where.includes(':') && arg === undefined) [where, arg] = [where.slice(0, where.indexOf(':')), where.slice(where.indexOf(':') + 1)];
   if (push && cur) { cur.scroll = $('#view').scrollTop; hist.push(cur); ahead.length = 0; }
   cur = { where, arg, scroll: 0 };
+  store.set('page', { where, arg: typeof arg === 'string' ? arg : null });
   return show(cur);
 }
 function back() { if (!hist.length) return; cur.scroll = $('#view').scrollTop; ahead.push(cur); cur = hist.pop(); show(cur); }
@@ -1076,6 +1087,10 @@ const views = {
     set();
     while (next && alive()) { const d = await get(next); items = items.concat(d.items); next = d.next; set(); }
     L.meta(`· ${items.length} nummers · ${fmt(items.reduce((s, t) => s + t.duration_ms, 0))}`);
+    const ar = a.artists[0];
+    const more = ar && await soft(pages(`/artists/${ar.id}/albums?include_groups=album,single&limit=10`, null, 30));
+    const others = (more || []).filter(x => x.id !== a.id && x.name !== a.name);
+    if (alive() && others.length) el.insertAdjacentHTML('beforeend', `<h2>Meer van ${esc(ar.name)} <a class="more" data-go="artist:${esc(ar.id)}">Alles</a></h2><div class="row-scroll">${others.map(albumCard).join('')}</div>`);
   },
 
   async artist(el, id, alive) {
@@ -1154,6 +1169,9 @@ const views = {
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
       <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="light">Licht</button><button data-t="dark">Donker</button></div></div>
+      <div class="box"><h3>Geluid</h3><p>Normaliseren zet alle nummers op ongeveer even hard. Geldt vanaf de volgende keer dat je Spotimfy opent.</p>
+        <div class="field" style="flex-wrap:wrap;gap:14px;align-items:center"><span class="sub">Normaliseren</span><div class="seg" id="set-norm"><button data-v="1">Aan</button><button data-v="0">Uit</button></div>
+        <span class="sub" style="margin-left:8px">Kwaliteit</span><div class="seg" id="set-rate"><button data-v="320">Hoog</button><button data-v="160">Normaal</button><button data-v="96">Laag</button></div></div></div>
       <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spotimfy niet voorop staat.</p>
         <div class="seg" id="set-island"><button data-v="1">Aan</button><button data-v="0">Uit</button></div></div>
       <div class="box"><h3>Sneltoetsen</h3><p>
@@ -1162,6 +1180,12 @@ const views = {
       <div class="box"><h3>Over Spotimfy</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
     </div>`;
     $$('#set-theme button', el).forEach(b => b.classList.toggle('on', b.dataset.t === theme));
+    const segPick = (id, key, cur, toVal) => {
+      $$(`#${id} button`, el).forEach(b => b.classList.toggle('on', b.dataset.v === String(cur)));
+      $('#' + id, el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const v = toVal(b.dataset.v); store.set(key, v); post('setting', { key, value: v }); $$(`#${id} button`, el).forEach(x => x.classList.toggle('on', x === b)); toast('Geldt vanaf de volgende start'); };
+    };
+    segPick('set-norm', 'normalise', store.get('normalise', true) ? 1 : 0, v => v === '1');
+    segPick('set-rate', 'bitrate', store.get('bitrate', 320), v => +v);
     const isl = store.get('island', true);
     $$('#set-island button', el).forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === isl));
     $('#set-island', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const on = b.dataset.v === '1'; store.set('island', on); post('island', { on }); $$('#set-island button', el).forEach(x => x.classList.toggle('on', x === b)); };
@@ -1441,11 +1465,38 @@ function palLocal(q) {
   return q ? out.slice(0, 6) : out.filter(x => x.kind === 'Net gehoord').concat(out.filter(x => x.kind !== 'Net gehoord').slice(0, 6));
 }
 const views_go = { pages: [['Home', 'home'], ['Bibliotheek', 'library'], ['Statistieken', 'stats'], ['Instellingen', 'settings']] };
+/** Opdrachten in ⌘K: [naam, extra zoekwoorden, actie]. */
+const commands = () => [
+  [S.playing ? 'Pauzeer' : 'Speel af', 'play pause afspelen', () => ctl('toggle')],
+  ['Volgende nummer', 'next skip', () => ctl('next')],
+  ['Vorige nummer', 'prev terug', () => ctl('prev')],
+  [`Shuffle ${S.shuffle ? 'uit' : 'aan'}`, 'shuffle willekeurig', () => ctl('shuffle', !S.shuffle)],
+  ['Herhalen: ' + ['alles', 'dit nummer', 'uit'][S.repeat], 'repeat herhaal', () => ctl('repeat', (S.repeat + 1) % 3)],
+  [S.track && S.liked.get(S.track.uri) ? 'Verwijder uit leuk' : 'Vind ik leuk', 'like hartje favoriet', () => S.track && toggleLike(S.track)],
+  ['Nu speelt', 'songtekst lyrics volledig scherm', () => openLyricsFull()],
+  ['Minispeler', 'mini klein', () => toggleMini()],
+  ['Wachtrij', 'queue', () => togglePanel('queue')],
+  ['Stop na dit nummer', 'stop', () => onRemote('stopafter')],
+  ...[15, 30, 45, 60].map(m => [`Slaaptimer ${m} minuten`, 'slaap sleep timer ' + m, () => { S.sleep = { until: Date.now() + m * 60000, vol: S.volume }; $('#b-sleep').classList.add('on'); toast(`Slaaptimer: ${m} minuten`); }]),
+  ['Thema: donker', 'dark donker thema', () => { store.set('theme', 'dark'); applyTheme(); }],
+  ['Thema: licht', 'light licht thema', () => { store.set('theme', 'light'); applyTheme(); }],
+  ['Thema: systeem', 'system systeem thema', () => { store.set('theme', 'system'); applyTheme(); }],
+  ['Nieuwe playlist', 'playlist maken nieuw', () => newPlaylist()],
+  ...(S.track ? [['Radio op basis van dit nummer', 'radio', () => radio(S.track)]] : []),
+];
 async function palRun() {
   const q = $('#pal-input').value.trim();
   const my = ++pal.seq;
   let items = palLocal(q);
-  if (q) for (const [n, w] of views_go.pages) if (n.toLowerCase().startsWith(q.toLowerCase())) items.push({ kind: 'Ga naar', t: n, s: 'Pagina', go: w, page: true });
+  if (q) {
+    const ql = q.toLowerCase();
+    const words = ql.split(/\s+/);
+    const cmds = commands().filter(([n, k]) => words.every(w => (n + ' ' + k).toLowerCase().includes(w))).slice(0, 4);
+    // Een opdracht die met de zoekterm begint, gaat bovenaan.
+    const cmdItems = cmds.map(([n, , fn]) => ({ kind: 'Opdrachten', t: n, s: 'Opdracht', run: fn, page: true }));
+    items = cmdItems.length && cmds[0][0].toLowerCase().startsWith(words[0]) ? [...cmdItems, ...items] : [...items, ...cmdItems];
+    for (const [n, w] of views_go.pages) if (n.toLowerCase().startsWith(ql)) items.push({ kind: 'Ga naar', t: n, s: 'Pagina', go: w, page: true });
+  }
   palDraw(items);
   if (q.length < 2) return;
   await sleep(110);
@@ -1483,6 +1534,7 @@ function palPick(mode) {
   const x = pal.items[pal.i];
   if (!x) return;
   closeOverlays();
+  if (x.run) return x.run();
   if (x.page) return go(x.go);
   if (mode === 'open' && x.go) return go(x.go);
   if (mode === 'queue' && x.track) return queueTrack(x.raw || { uri: x.uri, name: x.t });
@@ -1534,19 +1586,30 @@ function applyTheme() {
   const t = store.get('theme', 'system');
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.dataset.theme = t;
+  // De titelbalk en schuifbalken van het venster in dezelfde kleur.
+  post('theme', { dark: t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches) });
 }
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 applyTheme();
 
 // ——— opstarten ———
 async function start() {
   const cachedLists = store.get('playlists', null);
   if (cachedLists) renderSide(cachedLists);
-  go('home', undefined, false);
+  const was = store.get('page', null);
+  go(was?.where && was.where !== 'settings' ? was.where : 'home', was?.where ? was.arg ?? undefined : undefined, false);
   soft(api('/me')).then(me => { if (me) { S.me = me; store.set('me', me); } });
   myPlaylists(true).then(renderSide).catch(e => toast('Bibliotheek laden lukte niet: ' + e.message));
   pollRemote(true);
   renderModes();
   renderVolume();
+  // Verder waar je was: het laatste nummer staat klaar, ▶︎ gaat daar verder.
+  const last = store.get('last', null);
+  if (last?.track?.album && !S.track) {
+    S.track = last.track; S.dur = last.track.duration || 0; S.pos = last.position || 0; S.at = Date.now(); S.playing = false; S.resumable = true;
+    lastTrackUri = last.track.uri;
+    renderTrack(); renderPlay();
+  }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && S.ready && !S.local) pollRemote(true); });
 

@@ -445,3 +445,4 @@ body.mini #b-big { display: grid; position: fixed; top: 4px; right: 6px; width: 
 body.mini #b-big svg { width: 14px; height: 14px; }
 .ph.art { display: grid; place-items: center; background: linear-gradient(140deg, hsl(var(--h) 55% 42%), hsl(calc(var(--h) + 50) 60% 22%)) !important; color: rgba(255,255,255,.85); }
 .ph.art svg { width: 40%; height: 40%; }
+#seek-tip { position: absolute; bottom: 18px; transform: translateX(-50%); background: var(--ink); color: var(--bg) !important; font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 6px; width: auto !important; pointer-events: none; }

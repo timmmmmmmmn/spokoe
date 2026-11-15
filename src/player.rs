@@ -169,8 +169,12 @@ async fn connect(st: &mut State, browser: bool) {
 
     let session = Session::new(session_config, Some(cache));
     let player_config = PlayerConfig {
-        bitrate: Bitrate::Bitrate320,
-        normalisation: true,
+        bitrate: match settings::get("bitrate").as_u64() {
+            Some(96) => Bitrate::Bitrate96,
+            Some(160) => Bitrate::Bitrate160,
+            _ => Bitrate::Bitrate320,
+        },
+        normalisation: settings::get("normalise").as_bool().unwrap_or(true),
         position_update_interval: Some(Duration::from_secs(5)),
         ..PlayerConfig::default()
     };
@@ -329,19 +333,21 @@ async fn token(st: &mut State) -> Result<(String, u64), String> {
             }
         }
     }
-    // Eerst stil via de sessie; lukt dat niet, dan met de refresh-token of eenmalig via de browser.
-    let quick = live.session.token_provider().get_token_with_client_id(&scopes, &client_id);
-    if let Ok(Ok(t)) = tokio::time::timeout(Duration::from_secs(4), quick).await {
-        return Ok((t.access_token, t.expires_in.as_secs()));
+    // Eerst met de refresh-token (snel), dan stil via de sessie, en anders eenmalig via de browser.
+    let refresh = settings::get("refresh").as_str().map(String::from).filter(|r| !r.is_empty());
+    if refresh.is_none() {
+        let quick = live.session.token_provider().get_token_with_client_id(&scopes, &client_id);
+        if let Ok(Ok(t)) = tokio::time::timeout(Duration::from_secs(4), quick).await {
+            return Ok((t.access_token, t.expires_in.as_secs()));
+        }
     }
-    let refresh = settings::get("refresh").as_str().map(String::from);
     let got = tokio::task::spawn_blocking(move || {
         let client = librespot_oauth::OAuthClientBuilder::new(&client_id, REDIRECT, SCOPES.to_vec())
             .open_in_browser()
             .with_custom_message(DONE_PAGE)
             .build()
             .map_err(|e| e.to_string())?;
-        if let Some(r) = refresh.filter(|r| !r.is_empty()) {
+        if let Some(r) = refresh {
             if let Ok(t) = client.refresh_token(&r) {
                 return Ok(t);
             }
