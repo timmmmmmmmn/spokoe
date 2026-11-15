@@ -2934,6 +2934,7 @@ name = "spotimfy"
 version = "0.1.0"
 dependencies = [
  "block2",
+ "cpal",
  "dispatch2",
  "env_logger",
  "futures",

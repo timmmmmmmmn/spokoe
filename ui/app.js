@@ -48,7 +48,7 @@ function rpc(cmd, extra = {}) {
 window.spotimfy = {
   recv(m) {
     switch (m.type) {
-      case 'token': case 'lyrics': case 'meta': {
+      case 'token': case 'lyrics': case 'meta': case 'audioInfo': {
         const w = waiting.get(m.id);
         if (!w) return;
         waiting.delete(m.id);
@@ -72,6 +72,7 @@ window.spotimfy = {
       case 'remote': return onRemote(m.cmd, m.ms);
       case 'reconnected': return onReconnected();
       case 'island': store.set('island', m.on); return;
+      case 'toast': return toast(m.text);
       case 'fullscreen': return;
     }
   },
@@ -107,7 +108,7 @@ function onStatus(m) {
       S.offline = true;
       S.playing = false;
       renderPlay();
-      $('#offline').hidden = false;
+      if (!S.rebuilding) $('#offline').hidden = false;
     }
   } else if (m.state === 'error') {
     toast(m.message || 'Er ging iets mis');
@@ -121,9 +122,9 @@ function onReconnected() {
   const l = S.lost;
   S.lost = null;
   if (!l?.playing || !l.track) return;
-  toast('Weer verbonden');
+  if (!S.rebuilding) toast('Weer verbonden');
   if (l.ctx) resumeAt(l.ctx, l.track, l.pos);
-  else play({ tracks: [l.track.uri], position: l.pos });
+  else resumeMix(l.track, l.pos);
 }
 $('#login-btn').onclick = () => { post('login'); $('#login-btn').disabled = true; $('#login-btn').textContent = 'Kijk in je browser…'; };
 
@@ -387,6 +388,8 @@ function renderModes() {
   r.innerHTML = icon('repeat') + (S.repeat === 2 ? '<b style="position:absolute;font-size:8px;top:7px;right:5px">1</b>' : '');
 }
 function renderVolume() {
+  $('#vol').classList.toggle('fixed', store.get('bitperfect', false));
+  $('#vol').title = store.get('bitperfect', false) ? 'Bit-perfect: volume op je versterker of DAC' : '';
   $('#vol .fill').style.width = S.volume * 100 + '%';
   $('#vol .knob').style.left = S.volume * 100 + '%';
 }
@@ -453,7 +456,8 @@ $('#lf-prev').onclick = () => $('#b-prev').onclick();
 async function resumeSomething() {
   S.resumable = false;
   const last = store.get('last', null);
-  if (last?.context) resumeAt(last.context, last.track || { uri: last.uri, name: '', artists: [] }, last.position || 0);
+  if (last?.mix) resumeMix(last.track, last.position || 0);
+  else if (last?.context) resumeAt(last.context, last.track || { uri: last.uri, name: '', artists: [] }, last.position || 0);
   else play({ context: `spotify:user:${S.user}:collection` });
 }
 
@@ -467,7 +471,22 @@ async function resumeAt(context, track, position = 0) {
     else if (kind === 'album') list = (await get(`/albums/${id}`)).tracks.items.map(t => norm(t));
   } catch {}
   const index = list ? list.findIndex(t => sameSong(t, track)) : -1;
-  play(index >= 0 ? { context, index, position } : { context, uri: track.uri, position });
+  if (index >= 0) return play({ context, index, position });
+  // Niet (meer) in die lijst: dan dit nummer, en daarna een mix die erbij past.
+  S.ctx = null;
+  resumeMix(track, position);
+}
+
+/** Verder met de mix (na een herstart of herverbinding), of een nieuwe mix vanaf dit nummer. */
+function resumeMix(track, position = 0) {
+  const m = store.get('mix', null);
+  const at = m ? m.list.findIndex(t => sameSong(t, track)) : -1;
+  if (at >= 0) {
+    S.mix = { ...m, refilling: false };
+    play({ tracks: m.list.slice(at).map(t => t.uri), position });
+  } else {
+    playMix(track, { position });
+  }
 }
 
 function tick() {
@@ -497,7 +516,8 @@ setInterval(() => {
   const a = store.get('artistTime', {});
   for (const ar of S.track.artists.slice(0, 1)) a[ar.name] = (a[ar.name] || 0) + 10;
   store.set('artistTime', a);
-  if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists, album: S.track.album, duration: S.track.duration }, position: Math.round(position()) });
+  if (S.mix && !S.ctx) store.set('last', { mix: true, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists, album: S.track.album, duration: S.track.duration }, position: Math.round(position()) });
+  else if (S.ctx) store.set('last', { context: S.ctx, uri: S.track.uri, track: { uri: S.track.uri, name: S.track.name, artists: S.track.artists, album: S.track.album, duration: S.track.duration }, position: Math.round(position()) });
 }, 10000);
 
 function remember(t) {
@@ -1225,9 +1245,7 @@ const views = {
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
       <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="light">Licht</button><button data-t="dark">Donker</button></div></div>
-      <div class="box"><h3>Geluid</h3><p>Normaliseren zet alle nummers op ongeveer even hard. Geldt vanaf de volgende keer dat je Spotimfy opent.</p>
-        <div class="field" style="flex-wrap:wrap;gap:14px;align-items:center"><span class="sub">Normaliseren</span><div class="seg" id="set-norm"><button data-v="1">Aan</button><button data-v="0">Uit</button></div>
-        <span class="sub" style="margin-left:8px">Kwaliteit</span><div class="seg" id="set-rate"><button data-v="320">Hoog</button><button data-v="160">Normaal</button><button data-v="96">Laag</button></div></div></div>
+      <div class="box" id="audio-box"><h3>Geluid</h3><div class="empty" style="padding:10px 0">Laden…</div></div>
       <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spotimfy niet voorop staat.</p>
         <div class="seg" id="set-island"><button data-v="1">Aan</button><button data-v="0">Uit</button></div></div>
       <div class="box"><h3>Sneltoetsen</h3><p>
@@ -1240,8 +1258,7 @@ const views = {
       $$(`#${id} button`, el).forEach(b => b.classList.toggle('on', b.dataset.v === String(cur)));
       $('#' + id, el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const v = toVal(b.dataset.v); store.set(key, v); post('setting', { key, value: v }); $$(`#${id} button`, el).forEach(x => x.classList.toggle('on', x === b)); toast('Geldt vanaf de volgende start'); };
     };
-    segPick('set-norm', 'normalise', store.get('normalise', true) ? 1 : 0, v => v === '1');
-    segPick('set-rate', 'bitrate', store.get('bitrate', 320), v => +v);
+    audioSettings($('#audio-box', el));
     const isl = store.get('island', true);
     $$('#set-island button', el).forEach(b => b.classList.toggle('on', (b.dataset.v === '1') === isl));
     $('#set-island', el).onclick = e => { const b = e.target.closest('button'); if (!b) return; const on = b.dataset.v === '1'; store.set('island', on); post('island', { on }); $$('#set-island button', el).forEach(x => x.classList.toggle('on', x === b)); };
@@ -1250,6 +1267,107 @@ const views = {
     $('#set-logout', el).onclick = () => { post('logout'); S.ready = false; };
   },
 };
+
+// ——— geluid ———
+const EQ_BANDS = ['31', '62', '125', '250', '500', '1k', '2k', '4k', '8k', '16k'];
+const EQ_PRESETS = {
+  'Vlak': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  'Meer bas': [5, 4.5, 3.5, 2, 0.5, 0, 0, 0, 0, 0],
+  'Minder bas': [-5, -4, -3, -1.5, 0, 0, 0, 0, 0, 0],
+  'Stemmen': [-2, -2, -1, 1, 3, 4, 3.5, 2, 0, -1],
+  'Helder': [0, 0, 0, 0, 0, 0.5, 1.5, 3, 4, 4.5],
+  'V-vorm': [4, 3.5, 2, 0, -1.5, -2, -1, 1, 3, 4],
+  'Laptop-speakers': [-6, -4, -1, 1, 2, 2, 2, 2.5, 2, 1],
+  'AirPods': [1.5, 1, 0, -1, -1, 0, 1, 1.5, 1, 0],
+  'Klassiek': [3, 2.5, 2, 1, -1, -1, 0, 2, 2.5, 3],
+  'Elektronisch': [4.5, 4, 1, 0, -2, 1.5, 0.5, 1, 4, 4.5],
+  'Akoestisch': [3, 3, 2.5, 1, 1.5, 1.5, 2.5, 3, 2.5, 1.5],
+  'Hiphop': [5, 4, 1.5, 3, -1, -1, 1.5, -0.5, 2, 3],
+  'Nachtmodus': [-6, -5, -3, -1, 0, 1, 1, 0, -2, -4],
+};
+let dspState = null;
+function dspSend(patch) {
+  Object.assign(dspState, patch);
+  clearTimeout(dspSend.t);
+  dspSend.t = setTimeout(() => post('dsp', { dsp: patch.eq ? { ...patch, eq: dspState.eq } : patch }), 40);
+}
+
+/** Het geluid-blok in Instellingen. Gewone dingen bovenaan; de rest onder "Voor audiofielen". */
+async function audioSettings(box) {
+  const info = await rpc('audioInfo').catch(() => ({ devices: [], cache: 0, dsp: {} }));
+  const d = dspState = { eqOn: false, eq: Array(10).fill(0), preamp: 0, balance: 0, fadeMs: 40, crossfade: 0, speed: 1, ...(info.dsp || {}) };
+  const bp = store.get('bitperfect', false);
+  const rate = store.get('bitrate', null);
+  const dev = store.get('device', '');
+  const devices = info.devices || [];
+  const curDev = devices.find(x => x.name === dev) || devices.find(x => x.default) || {};
+  const opt = (v, label, cur) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(label)}</option>`;
+  box.innerHTML = `<h3>Geluid</h3>
+    <div class="row-set"><span>Kwaliteit</span><select id="a-rate">${opt('', 'Automatisch (aanbevolen)', rate ?? '')}${opt(320, 'Zeer hoog · 320 kbps', rate)}${opt(160, 'Normaal · 160 kbps', rate)}${opt(96, 'Laag · 96 kbps (bespaart data)', rate)}</select></div>
+    <div class="row-set"><span>Crossfade</span><input type="range" id="a-xf" min="0" max="12" step="1" value="${d.crossfade}"><b id="a-xf-v"></b></div>
+    <div class="row-set"><span>Balans</span><input type="range" id="a-bal" min="-1" max="1" step="0.05" value="${d.balance}"><b id="a-bal-v"></b></div>
+    <div class="row-set"><span>Snelheid podcasts</span><select id="a-speed">${[0.75, 1, 1.25, 1.5, 1.75, 2].map(x => opt(x, x === 1 ? 'Normaal' : `${String(x).replace('.', ',')}×`, d.speed)).join('')}</select></div>
+    <div class="eq${d.eqOn ? '' : ' off'}">
+      <div class="eq-head"><b>Equalizer</b><label class="switch"><input type="checkbox" id="a-eq-on"${d.eqOn ? ' checked' : ''}><span></span></label>
+        <select id="a-eq-preset"><option value="">Voorinstelling…</option>${Object.keys(EQ_PRESETS).map(k => opt(k, k, '')).join('')}</select></div>
+      <div class="eq-bands">${EQ_BANDS.map((b, i) => `<div><span class="eq-val" id="a-eqv-${i}"></span><input type="range" orient="vertical" min="-12" max="12" step="0.5" value="${d.eq[i]}" data-band="${i}"><span>${b}</span></div>`).join('')}
+        <div class="pre"><span class="eq-val" id="a-prev"></span><input type="range" orient="vertical" min="-12" max="6" step="0.5" value="${d.preamp}" id="a-pre"><span>Pre</span></div></div>
+    </div>
+    <details class="audiophile"${bp ? ' open' : ''}><summary>Voor audiofielen</summary>
+      <div class="row-set"><span>Uitvoer</span><select id="a-dev">${opt('', 'Systeemstandaard', dev)}${devices.map(x => opt(x.name, x.name + (x.native441 ? ' · 44,1 kHz' : x.rate ? ` · ${x.rate / 1000} kHz` : ''), dev)).join('')}</select></div>
+      <div class="row-set"><span>Bit-perfect</span><label class="switch"><input type="checkbox" id="a-bp"${bp ? ' checked' : ''}><span></span></label>
+        <small>Geen equalizer, normalisatie, volume of andere bewerking: het gedecodeerde signaal gaat onaangeroerd naar je DAC. Regel het volume op je versterker.</small></div>
+      <div class="row-set"><span>Normaliseren</span><label class="switch"><input type="checkbox" id="a-norm"${store.get('normalise', true) ? ' checked' : ''}${bp ? ' disabled' : ''}><span></span></label><small>Alle nummers ongeveer even hard.</small></div>
+      <div class="row-set"><span>Zachte start</span><input type="range" id="a-fade" min="0" max="300" step="10" value="${d.fadeMs}"><b id="a-fade-v"></b></div>
+      <div class="signal"><b>Signaalpad</b><ol>
+        <li>Spotify · Ogg Vorbis · ${rate ? rate + ' kbps' : 'automatisch (320 kbps)'}</li>
+        <li>Gedecodeerd naar 44,1 kHz · 32-bit float</li>
+        <li>${bp ? 'Bit-perfect: geen bewerking' : [d.eqOn ? 'equalizer' : '', store.get('normalise', true) ? 'normalisatie' : '', d.crossfade ? `crossfade ${d.crossfade} s` : '', 'softwarevolume'].filter(Boolean).join(' · ')}</li>
+        <li>${esc(curDev.name || 'Systeemstandaard')} · ${curDev.native441 ? '44,1 kHz, zonder omrekenen' : curDev.rate ? `${curDev.rate / 1000} kHz (omgerekend)` : ''}</li></ol></div>
+      <div class="row-set"><span>Cache</span><select id="a-cache">${[1, 2, 5, 10, 20].map(g => opt(g, `${g} GB`, store.get('cacheGB', 2))).join('')}</select>
+        <button class="ghost" id="a-clear">Leeg cache (${Math.round((info.cache || 0) / 1e6)} MB)</button></div>
+      <div class="row-set"><span>Logboek</span><button class="ghost" id="a-log">Open logboek</button></div>
+    </details>`;
+  const $b = q => $(q, box);
+  const label = () => {
+    $b('#a-xf-v').textContent = d.crossfade ? `${d.crossfade} s` : 'Uit';
+    $b('#a-bal-v').textContent = Math.abs(d.balance) < 0.03 ? 'Midden' : d.balance < 0 ? `L ${Math.round(-d.balance * 100)}%` : `R ${Math.round(d.balance * 100)}%`;
+    $b('#a-fade-v').textContent = d.fadeMs ? `${d.fadeMs} ms` : 'Uit';
+    EQ_BANDS.forEach((_, i) => $b('#a-eqv-' + i).textContent = (d.eq[i] > 0 ? '+' : '') + d.eq[i]);
+    $b('#a-prev').textContent = (d.preamp > 0 ? '+' : '') + d.preamp;
+  };
+  label();
+  const rebuild = msg => { S.rebuilding = true; post('rebuild'); toast(msg || 'Geluid opnieuw instellen…'); setTimeout(() => S.rebuilding = false, 8000); };
+  const setting = (key, value) => { store.set(key, value); post('setting', { key, value }); };
+  $b('#a-rate').onchange = e => { setting('bitrate', e.target.value ? +e.target.value : null); rebuild(); };
+  $b('#a-xf').oninput = e => { dspSend({ crossfade: +e.target.value }); label(); };
+  $b('#a-bal').oninput = e => { let v = +e.target.value; if (Math.abs(v) < 0.06) v = 0; dspSend({ balance: v }); label(); };
+  $b('#a-speed').onchange = e => dspSend({ speed: +e.target.value });
+  $b('#a-fade').oninput = e => { dspSend({ fadeMs: +e.target.value }); label(); };
+  $b('#a-eq-on').onchange = e => { dspSend({ eqOn: e.target.checked }); $b('.eq').classList.toggle('off', !e.target.checked); };
+  $$('[data-band]', box).forEach(r => r.oninput = () => { d.eq[+r.dataset.band] = +r.value; dspSend({ eq: d.eq }); label(); });
+  $b('#a-pre').oninput = e => { dspSend({ preamp: +e.target.value }); label(); };
+  $b('#a-eq-preset').onchange = e => {
+    const p = EQ_PRESETS[e.target.value];
+    if (!p) return;
+    d.eq = [...p];
+    // Voorversterking omlaag zodat het niet gaat clippen.
+    const peak = Math.max(0, ...p);
+    dspSend({ eq: d.eq, eqOn: true, preamp: -Math.round(peak * 0.8 * 2) / 2 });
+    $b('#a-eq-on').checked = true;
+    $b('.eq').classList.remove('off');
+    $$('[data-band]', box).forEach(r => r.value = d.eq[+r.dataset.band]);
+    $b('#a-pre').value = d.preamp;
+    label();
+    e.target.value = '';
+  };
+  $b('#a-dev').onchange = e => { setting('device', e.target.value); rebuild('Overschakelen naar ' + (e.target.value || 'systeemstandaard') + '…'); setTimeout(() => audioSettings(box), 2500); };
+  $b('#a-bp').onchange = e => { setting('bitperfect', e.target.checked); dspSend({ bitperfect: e.target.checked }); renderVolume(); rebuild(e.target.checked ? 'Bit-perfect aan' : 'Bit-perfect uit'); setTimeout(() => audioSettings(box), 300); };
+  $b('#a-norm').onchange = e => { setting('normalise', e.target.checked); rebuild(); };
+  $b('#a-cache').onchange = e => { setting('cacheGB', +e.target.value); toast('Geldt vanaf de volgende start'); };
+  $b('#a-clear').onclick = () => { post('clearCache'); setTimeout(() => audioSettings(box), 600); };
+  $b('#a-log').onclick = () => post('openLog');
+}
 
 /** De kop + knoppen + nummerlijst van een playlist, album of favorieten. */
 async function collection(el, o, alive) {
@@ -1374,7 +1492,7 @@ async function mixFor(seeds, { count = 40, skip = [] } = {}) {
 }
 
 /** Een los nummer (of artiest) starten en daarna doorspelen met een passende mix. */
-async function playMix(seed, { label } = {}) {
+async function playMix(seed, { label, position = 0 } = {}) {
   S.ctx = null;
   const isArtist = seed.uri.startsWith('spotify:artist:');
   const timeout = new Promise(r => setTimeout(() => r(null), isArtist ? 4000 : 900));
@@ -1382,7 +1500,8 @@ async function playMix(seed, { label } = {}) {
   const mix = await Promise.race([first, timeout]);
   const list = isArtist ? mix || await first : [seed, ...(mix || [])];
   S.mix = { list: list.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })), label: label || (isArtist ? `Radio: ${seed.name}` : `Mix: ${seed.name}`), refilling: false };
-  play({ tracks: list.map(t => t.uri) });
+  store.set('mix', S.mix);
+  play({ tracks: list.map(t => t.uri), ...(position && !isArtist ? { position } : {}) });
   if (!mix && !isArtist) first.then(more => { S.mix.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists }))); queueUris(more.slice(0, 15).map(t => t.uri)); });
 }
 
@@ -1396,6 +1515,7 @@ async function mixRefill() {
   const seeds = m.list.slice(Math.max(0, at - 2), at + 1);
   const more = await mixFor(seeds, { count: 20, skip: m.list });
   m.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })));
+  store.set('mix', { list: m.list.slice(-120), label: m.label });
   await queueUris(more.map(t => t.uri));
   m.refilling = false;
 }

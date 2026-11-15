@@ -210,6 +210,35 @@ fn handle(text: &str) {
         "mini" => set_mini(msg["on"].as_bool().unwrap_or(false)),
         "island" => crate::settings::set("island", msg["on"].clone()),
         "setting" => crate::settings::set(msg["key"].as_str().unwrap_or("x"), msg["value"].clone()),
+        "dsp" => {
+            crate::dsp::set(&msg["dsp"]);
+            // Bewaren: wat er al was, aangevuld met het nieuwe.
+            let mut all = crate::settings::get("dsp");
+            if !all.is_object() {
+                all = json!({});
+            }
+            if let (Some(o), Some(n)) = (all.as_object_mut(), msg["dsp"].as_object()) {
+                o.extend(n.clone());
+            }
+            crate::settings::set("dsp", all);
+        }
+        "rebuild" => player::send(Cmd::Rebuild),
+        "audioInfo" => {
+            let id = msg["id"].clone();
+            std::thread::spawn(move || {
+                send(json!({
+                    "type": "audioInfo",
+                    "id": id,
+                    "devices": player::devices(),
+                    "cache": player::dir_size(&player::data_dir().join("audio")),
+                    "dsp": crate::settings::get("dsp"),
+                }));
+            });
+        }
+        "clearCache" => {
+            let freed = player::clear_cache();
+            send(json!({ "type": "toast", "text": format!("Cache geleegd ({} MB vrij)", freed / 1_000_000) }));
+        }
         "theme" => {
             let dark = msg["dark"].as_bool().unwrap_or(true);
             with_ui(|ui| {

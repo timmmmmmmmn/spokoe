@@ -69,6 +69,8 @@ pub enum Cmd {
     Retry,
     /// Alleen in testmodus: doen alsof de verbinding wegvalt.
     DevLose,
+    /// Geluid opnieuw opbouwen (ander apparaat, kwaliteit, bit-perfect); de muziek gaat daarna verder.
+    Rebuild,
 }
 
 static TX: OnceLock<UnboundedSender<Cmd>> = OnceLock::new();
@@ -157,8 +159,16 @@ async fn run(mut rx: UnboundedReceiver<Cmd>) {
 fn cache() -> Result<Cache, librespot::core::Error> {
     let dir = data_dir();
     let audio = dir.join("audio");
-    // 2 GB aan nummers bewaren: een tweede keer afspelen begint meteen.
-    Cache::new(Some(&dir), Some(&dir), Some(&audio), Some(2 * 1024 * 1024 * 1024))
+    // Nummers bewaren (standaard 2 GB): een tweede keer afspelen begint meteen.
+    let gb = settings::get("cacheGB").as_f64().unwrap_or(2.0).clamp(0.5, 50.0);
+    Cache::new(Some(&dir), Some(&dir), Some(&audio), Some((gb * 1024.0 * 1024.0 * 1024.0) as u64))
+}
+
+/// Speelt er nu iets (voor pauzeren met een fade).
+static PLAYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn bitperfect() -> bool {
+    settings::get("bitperfect").as_bool().unwrap_or(false)
 }
 
 /// Verbinden; `true` als het lukte. Mislukt het door het netwerk, dan volgt vanzelf een nieuwe poging.
@@ -200,13 +210,18 @@ async fn connect(st: &mut State, browser: bool) -> bool {
     };
 
     let session = Session::new(session_config, Some(cache));
+    let bp = bitperfect();
     let player_config = PlayerConfig {
         bitrate: match settings::get("bitrate").as_u64() {
             Some(96) => Bitrate::Bitrate96,
             Some(160) => Bitrate::Bitrate160,
+            // Automatisch: hoog, tenzij de vorige keer bleek dat de verbinding traag was.
+            None if settings::get("slowNet").as_bool().unwrap_or(false) => Bitrate::Bitrate160,
             _ => Bitrate::Bitrate320,
         },
-        normalisation: settings::get("normalise").as_bool().unwrap_or(true),
+        // Bit-perfect: niets aan het geluid veranderen, ook geen normalisatie of dither.
+        normalisation: !bp && settings::get("normalise").as_bool().unwrap_or(true),
+        ditherer: if bp { None } else { PlayerConfig::default().ditherer },
         position_update_interval: Some(Duration::from_secs(5)),
         ..PlayerConfig::default()
     };
@@ -225,9 +240,13 @@ async fn connect(st: &mut State, browser: bool) -> bool {
             return false;
         }
     };
-    let player = Player::new(player_config, session.clone(), mixer.get_soft_volume(), move || sink(None, AudioFormat::default()));
+    let device = settings::get("device").as_str().filter(|d| !d.is_empty()).map(String::from);
+    // 32-bit float naar de uitgang: geen afronding tussendoor.
+    let player = Player::new(player_config, session.clone(), mixer.get_soft_volume(), move || {
+        Box::new(crate::dsp::DspSink::new(sink(device.clone(), AudioFormat::F32))) as Box<dyn librespot::playback::audio_backend::Sink>
+    });
     let events = player.get_player_event_channel();
-    let volume = settings::get("volume").as_u64().map(|v| v as u16).unwrap_or(u16::MAX / 2);
+    let volume = if bp { u16::MAX } else { settings::get("volume").as_u64().map(|v| v as u16).unwrap_or(u16::MAX / 2) };
     let connect_config = ConnectConfig {
         name: "Spotimfy op deze Mac".into(),
         device_type: DeviceType::Computer,
@@ -266,6 +285,17 @@ async fn connect(st: &mut State, browser: bool) -> bool {
     tokio::spawn(forward_events(events));
     let user = session.username();
     st.live = Some(Live { session, spirc: Arc::new(spirc) });
+    if settings::get("bitrate").is_null() {
+        let probe_session = st.live.as_ref().map(|l| l.session.clone());
+        tokio::spawn(async move {
+            let Some(session) = probe_session else { return };
+            let t0 = std::time::Instant::now();
+            let probe = tokio::time::timeout(Duration::from_secs(3), session.spclient().get_user_profile(&session.username(), Some(1), Some(1))).await;
+            let slow = !matches!(probe, Ok(Ok(_))) || t0.elapsed() > Duration::from_millis(900);
+            log::info!("verbinding: {} ms{}", t0.elapsed().as_millis(), if slow { " (traag: volgende keer 160 kbps)" } else { "" });
+            settings::set("slowNet", json!(slow));
+        });
+    }
     let was_offline = st.failures > 0;
     st.failures = 0;
     status("ready", json!({ "user": user, "volume": volume as f64 / u16::MAX as f64 }));
@@ -325,6 +355,13 @@ async fn handle(st: &mut State, cmd: Cmd) {
             }
         }
         Cmd::DevLose => lose(st),
+        Cmd::Rebuild => {
+            if st.live.is_some() {
+                lose(st);
+                st.retry_pending = false;
+                send(Cmd::Retry);
+            }
+        }
         Cmd::Lost(generation) => {
             if generation == st.generation {
                 lose(st);
@@ -405,6 +442,17 @@ async fn handle(st: &mut State, cmd: Cmd) {
                 st.active = true;
             }
         }
+        Cmd::Pause | Cmd::Toggle if PLAYING.load(std::sync::atomic::Ordering::Relaxed) && !bitperfect() && crate::dsp::params().fade_ms > 0.0 => {
+            // Pauzeren met een heel korte fade, geen klik.
+            let Some(live) = &st.live else { return };
+            crate::dsp::fade_out();
+            let spirc = live.spirc.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(130)).await;
+                let _ = spirc.pause();
+            });
+        }
+        Cmd::Volume(_) if bitperfect() => {}
         other => {
             let Some(live) = &st.live else { return };
             let s = &live.spirc;
@@ -529,6 +577,7 @@ async fn forward_events(mut events: librespot::playback::player::PlayerEventChan
                 let cover = item.covers.first().map(|c| c.url.clone()).unwrap_or_default();
                 let names: Vec<String> = artists.iter().filter_map(|a: &Value| a["name"].as_str().map(String::from)).collect();
                 nowplaying::track(&item.name, &names.join(", "), &album, item.duration_ms, &cover);
+                crate::dsp::track_changed(item.duration_ms, matches!(item.unique_fields, UniqueFields::Episode { .. }));
                 json!({
                     "type": "track",
                     "uri": item.uri,
@@ -541,10 +590,12 @@ async fn forward_events(mut events: librespot::playback::player::PlayerEventChan
                 })
             }
             PlayerEvent::Playing { position_ms, .. } => {
+                PLAYING.store(true, std::sync::atomic::Ordering::Relaxed);
                 nowplaying::state(true, position_ms);
                 json!({ "type": "play", "playing": true, "position": position_ms, "at": now_ms() })
             }
             PlayerEvent::Paused { position_ms, .. } => {
+                PLAYING.store(false, std::sync::atomic::Ordering::Relaxed);
                 nowplaying::state(false, position_ms);
                 json!({ "type": "play", "playing": false, "position": position_ms, "at": now_ms() })
             }
@@ -553,9 +604,12 @@ async fn forward_events(mut events: librespot::playback::player::PlayerEventChan
                 json!({ "type": "stopped" })
             }
             PlayerEvent::Loading { position_ms, .. } => json!({ "type": "loading", "position": position_ms }),
-            PlayerEvent::Seeked { position_ms, .. }
-            | PlayerEvent::PositionCorrection { position_ms, .. }
-            | PlayerEvent::PositionChanged { position_ms, .. } => {
+            PlayerEvent::Seeked { position_ms, .. } | PlayerEvent::PositionCorrection { position_ms, .. } => {
+                crate::dsp::seeked(position_ms);
+                nowplaying::position(position_ms);
+                position(position_ms)
+            }
+            PlayerEvent::PositionChanged { position_ms, .. } => {
                 nowplaying::position(position_ms);
                 position(position_ms)
             }
@@ -570,4 +624,40 @@ async fn forward_events(mut events: librespot::playback::player::PlayerEventChan
         };
         ui::send(msg);
     }
+}
+
+/// De uitvoerapparaten (voor Instellingen), met wat ze kunnen.
+pub fn devices() -> Value {
+    use cpal::traits::{DeviceTrait, HostTrait};
+    let host = cpal::default_host();
+    let default = host.default_output_device().and_then(|d| d.name().ok());
+    let list: Vec<Value> = host
+        .output_devices()
+        .map(|it| {
+            it.filter_map(|d| {
+                let name = d.name().ok()?;
+                let rate = d.default_output_config().ok().map(|c| c.sample_rate().0);
+                // Kan het apparaat zelf 44,1 kHz (de bron van Spotify)? Dan hoeft er niets omgerekend te worden.
+                let native = d.supported_output_configs().ok().is_some_and(|mut c| c.any(|c| c.channels() == 2 && c.min_sample_rate().0 <= 44100 && c.max_sample_rate().0 >= 44100));
+                Some(json!({ "name": name, "rate": rate, "native441": native, "default": Some(&name) == default.as_ref() }))
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+    json!(list)
+}
+
+/// De cache met nummers legen.
+pub fn clear_cache() -> u64 {
+    let dir = data_dir().join("audio");
+    let size = dir_size(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::create_dir_all(&dir);
+    size
+}
+
+pub fn dir_size(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|it| it.flatten().map(|e| e.metadata().map(|m| if m.is_dir() { dir_size(&e.path()) } else { m.len() }).unwrap_or(0)).sum())
+        .unwrap_or(0)
 }

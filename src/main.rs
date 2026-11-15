@@ -2,6 +2,7 @@
 //! Spotify Connect-apparaat); de interface is een lokale pagina in een WKWebView.
 
 mod dev;
+mod dsp;
 mod island;
 mod meta;
 mod nowplaying;
@@ -52,6 +53,7 @@ fn main() {
     app.setDelegate(Some(ProtocolObject::from_ref(&*host)));
     ui::build(mtm, &host);
     nowplaying::setup();
+    dsp::set(&settings::get("dsp"));
     player::start();
     dev::start();
     std::mem::forget(host);
