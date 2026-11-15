@@ -217,6 +217,19 @@ function norm(t, album) {
   };
 }
 
+/** Playlists op schijf (de laatste 50): openen direct, ook zonder internet. */
+const plCache = {
+  get: id => store.get('pl:' + id, null),
+  set(id, tracks) {
+    const slim = tracks.slice(0, 3000).map(t => ({ uri: t.uri, id: t.id, name: t.name, artists: t.artists.map(a => ({ name: a.name, id: a.id })), album: { name: t.album.name, id: t.album.id, images: t.album.images?.slice(0, 1) || [] }, duration: t.duration, explicit: t.explicit || undefined, added: t.added || undefined, playable: t.playable === false ? false : undefined }));
+    let index = store.get('plIndex', []).filter(x => x !== id);
+    index.unshift(id);
+    for (const old of index.slice(50)) { try { localStorage.removeItem('spotimfy:pl:' + old); } catch {} }
+    store.set('plIndex', index.slice(0, 50));
+    store.set('pl:' + id, slim);
+  },
+};
+
 const coreLists = new Map();
 /** De inhoud van een playlist via de kern (vijf minuten onthouden). */
 function corePlaylist(id) {
@@ -608,6 +621,7 @@ $('#side-new').onclick = () => newPlaylist();
 $('#fwd').onclick = forward;
 
 let renderId = 0;
+let restoreScroll = 0;
 async function show(entry) {
   const id = ++renderId;
   const view = $('#view');
@@ -648,9 +662,8 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
   const added = () => L.tracks.some(t => t.added);
   const arrow = k => L.sort?.k === k ? (L.sort.dir > 0 ? ' ↑' : ' ↓') : '';
   const head = () => `<div class="tr head"><div class="n">#</div><div data-sort="name">Titel${arrow('name')}</div><div class="al" data-sort="album">Album${arrow('album')}</div>${added() ? `<div class="ad" data-sort="added">Toegevoegd${arrow('added')}</div>` : ''}<div></div><div class="d" data-sort="duration">${arrow('duration')}${icon('clock')}</div></div>`;
-  let n = 0;
   const day = ms => new Date(ms).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' });
-  const row = (t, i) => `<div class="tr${t.playable === false ? ' unplayable' : ''}" data-i="${i}" data-uri="${esc(t.uri)}" draggable="true">
+  const row = (t, i) => `<div class="tr${t.playable === false ? ' unplayable' : ''}${L.sel === i ? ' sel' : ''}" data-i="${i}" data-uri="${esc(t.uri)}" draggable="true" style="top:${i * ROW}px">
     <div class="n"><span>${numbers && t.number ? t.number : i + 1}</span><i class="eq"><b></b><b></b><b></b></i></div>
     <div class="main">${cover ? img(t.album.images, 64) : ''}<div><div class="t">${t.explicit ? '<span class="E">E</span>' : ''}${esc(t.name)}</div>
     <div class="a">${t.artists.map(a => a.id ? `<a data-go="artist:${esc(a.id)}">${esc(a.name)}</a>` : esc(a.name)).join(', ')}</div></div></div>
@@ -658,21 +671,25 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
     ${added() ? `<div class="ad">${t.added ? day(t.added) : ''}</div>` : ''}
     <button class="icon like${S.liked.get(t.uri) ? ' on' : ''}" data-like>${icon(S.liked.get(t.uri) ? 'heart-on' : 'heart')}</button>
     <div class="d">${fmt(t.duration)}</div></div>`;
+  // Alleen de rijen die je ziet bestaan echt: ook 10.000 nummers blijven soepel.
   L.render = () => {
-    const list = L.shown;
-    n = Math.min(list.length, Math.max(n, 80));
     el.classList.toggle('with-added', added());
-    el.innerHTML = head() + list.slice(0, n).map((t, i) => row(t, i)).join('') + (n < list.length ? '<button class="more-rows loading-more">Meer…</button>' : '');
-    const m = $('.more-rows', el);
-    if (m) m.onclick = () => {
-      const from = n;
-      n = Math.min(list.length, n + 200);
-      m.insertAdjacentHTML('beforebegin', list.slice(from, n).map((t, i) => row(t, from + i)).join(''));
-      if (n >= list.length) m.remove();
-      markNow();
-      checkLiked(list.slice(from, n));
-    };
+    el.innerHTML = head() + `<div class="vbody" style="height:${L.shown.length * ROW}px"></div>`;
+    L.body = $('.vbody', el);
+    L.painted = null;
+    L.paint(true);
+  };
+  L.paint = force => {
+    const view = $('#view');
+    if (!L.body?.isConnected) return;
+    const top = L.body.getBoundingClientRect().top - view.getBoundingClientRect().top;
+    const first = Math.max(0, Math.floor(-top / ROW) - 12);
+    const last = Math.min(L.shown.length, Math.ceil((view.clientHeight - top) / ROW) + 12);
+    if (!force && L.painted && first === L.painted[0] && last === L.painted[1]) return;
+    L.painted = [first, last];
+    L.body.innerHTML = L.shown.slice(first, last).map((t, k) => row(t, first + k)).join('');
     markNow();
+    checkLiked(L.shown.slice(first, last));
   };
   L.filter = q => {
     if (q !== undefined) L.q = q.trim().toLowerCase();
@@ -683,7 +700,7 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
       list = [...list].sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * dir);
     }
     L.shown = list;
-    n = 0;
+    L.sel = null;
     L.render();
   };
   // Op een kolomkop klikken: oplopend, aflopend, weer zoals het was.
@@ -695,9 +712,17 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
     L.filter();
   });
   L.render();
-  checkLiked(tracks.slice(0, 80));
   return L;
 }
+const ROW = 54;
+// Bij scrollen en groter/kleiner maken: de zichtbare rijen bijwerken.
+const paintLists = () => requestAnimationFrame(() => lists.forEach(L => L.body?.isConnected && L.paint()));
+$('#view').addEventListener('scroll', paintLists, { passive: true });
+$('#view').addEventListener('scroll', () => {
+  clearTimeout(paintLists.t);
+  paintLists.t = setTimeout(() => cur && store.set('page', { where: cur.where, arg: typeof cur.arg === 'string' ? cur.arg : null, scroll: $('#view').scrollTop }), 400);
+}, { passive: true });
+addEventListener('resize', paintLists);
 
 function playFromList(L, i) {
   const t = L.shown[i];
@@ -736,12 +761,19 @@ function markNow() {
   $$('#side-lists button').forEach(b => b.classList.toggle('playing', !!S.ctx && b.dataset.card === S.ctx && S.local));
 }
 
-let selRow = null;
+let selList = null;
 $('#view').addEventListener('click', e => {
   const like = e.target.closest('[data-like]');
   const row = e.target.closest('.tr[data-i]');
   if (like && row) { const L = lists.get(row.closest('[data-list]').dataset.list); toggleLike(L.shown[+row.dataset.i]).then(() => checkLiked([])); return; }
-  if (row && !e.target.closest('a')) { selRow?.classList.remove('sel'); selRow = row; row.classList.add('sel'); }
+  if (row && !e.target.closest('a')) {
+    $$('.tr.sel').forEach(r => r.classList.remove('sel'));
+    lists.forEach(x => x.sel = null);
+    const L = lists.get(row.closest('[data-list]').dataset.list);
+    L.sel = +row.dataset.i;
+    selList = L;
+    row.classList.add('sel');
+  }
 });
 $('#view').addEventListener('dblclick', e => {
   const row = e.target.closest('.tr[data-i]');
@@ -1064,6 +1096,9 @@ const views = {
       const my = ++seq;
       const out = $('#s-out', el);
       if (!qv) { out.innerHTML = searchHistory(); return; }
+      // Meteen: wat je zelf hebt (playlists en nummers uit onthouden lijsten), terwijl Spotify zoekt.
+      const local = localSearch(qv);
+      if (type === 'all' && local) out.innerHTML = local;
       const types = type === 'all' ? 'track,artist,album,playlist' : type;
       const r = await soft(get(`/search?q=${encodeURIComponent(qv)}&type=${types}&limit=10`, 600000));
       if (my !== seq || !alive()) return;
@@ -1087,6 +1122,7 @@ const views = {
         const list = type === 'artist' ? artists.map(artistCard) : type === 'album' ? albums.map(albumCard) : pls.map(playlistCard);
         out.innerHTML = `<div class="grid">${list.join('') || '<div class="empty">Niets gevonden</div>'}</div>`;
       }
+      if (type === 'all' && local) out.insertAdjacentHTML('beforeend', local);
       const sh = store.get('searches', []).filter(s => s !== qv);
       sh.unshift(qv);
       store.set('searches', sh.slice(0, 12));
@@ -1130,23 +1166,37 @@ const views = {
 
   async playlist(el, id, alive) {
     const cached = (myPlaylists.list || store.get('playlists', [])).find(p => p.id === id);
-    const p = await get(`/playlists/${id}`, 120000).catch(() => cached);
+    const offline = plCache.get(id);
+    const p = await get(`/playlists/${id}`, 120000).catch(() => cached || (offline && { id, uri: 'spotify:playlist:' + id, name: 'Playlist', images: [] }));
     if (!alive() || !p) return;
     const L = await collection(el, {
       kind: 'Playlist', title: p.name, images: p.images, uri: p.uri, desc: p.description,
       meta: `<b>${esc(p.owner?.display_name || '')}</b>${p.followers?.total ? ` · ${p.followers.total.toLocaleString('nl-NL')} volgers` : ''}`,
     }, alive);
+    if (offline) L.set(offline);
     if (p.owner?.id === S.me?.id) {
-      try { await playlistItems(id, (_, all) => alive() && L.set(all.map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean))); return; } catch {}
+      try {
+        const all = await playlistItems(id, (_, all) => alive() && all.length > (offline?.length || 0) && L.set(all.map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean)));
+        const tracks = all.map(x => withAdded(norm(x.item || x.track), x)).filter(Boolean);
+        if (alive()) L.set(tracks);
+        plCache.set(id, tracks);
+        return;
+      } catch {}
     }
     // Van iemand anders: de Web API geeft de inhoud niet meer, de kern wel.
     const tracks = await corePlaylist(id);
     if (alive()) L.set(tracks);
+    plCache.set(id, tracks);
   },
 
   async liked(el, _, alive) {
     const L = await collection(el, { kind: 'Playlist', title: 'Nummers die je leuk vindt', liked: true, uri: `spotify:user:${S.user}:collection`, meta: `<b>${esc(S.me?.display_name || '')}</b>` }, alive);
-    await pages('/me/tracks?limit=50', (_, all) => alive() && L.set(all.map(x => withAdded(norm(x.track), x)).filter(Boolean)));
+    const offline = plCache.get('liked');
+    if (offline) L.set(offline);
+    const all = await pages('/me/tracks?limit=50', (_, all) => alive() && all.length > (offline?.length || 0) && L.set(all.map(x => withAdded(norm(x.track), x)).filter(Boolean)));
+    const tracks = all.map(x => withAdded(norm(x.track), x)).filter(Boolean);
+    if (alive()) L.set(tracks);
+    plCache.set('liked', tracks);
   },
 
   async album(el, id, alive) {
@@ -1392,6 +1442,8 @@ async function collection(el, o, alive) {
       if (!L) { listEl.innerHTML = ''; L = coll.L = trackList(listEl, list, { ctx: { uri: o.uri }, album: o.album !== false, numbers: o.numbers, cover: o.cover !== false }); }
       else { const scroll = $('#view').scrollTop; L.tracks = list; L.filter(); $('#view').scrollTop = scroll; }
       $('.c-count', el).textContent = extraMeta || `· ${list.length} nummers`;
+      // Na een herstart: terug naar waar je was in de lijst.
+      if (restoreScroll && list.length * ROW > restoreScroll) { $('#view').scrollTop = restoreScroll; restoreScroll = 0; }
     },
     meta(t) { extraMeta = t; $('.c-count', el).textContent = t; },
   };
@@ -1552,6 +1604,26 @@ async function smartShuffle(uri, tracks) {
   if (S.shuffle) post('shuffle', { on: false });
   play({ tracks: out.slice(0, 700).map(t => t.uri) });
   toast(`Slim geshuffeld: ${Math.min(700, out.length)} nummers`);
+}
+
+/** Zoeken in wat Spotimfy al weet: je playlists en de nummers daarin. */
+function localSearch(q) {
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+  const hit = s => words.every(w => s.toLowerCase().includes(w));
+  const pls = (myPlaylists.list || store.get('playlists', [])).filter(p => hit(p.name)).slice(0, 4);
+  const seen = new Set(), tracks = [];
+  for (const id of store.get('plIndex', [])) {
+    for (const t of plCache.get(id) || []) {
+      if (tracks.length >= 6) break;
+      const k = songKey(t);
+      if (!seen.has(k) && hit(t.name + ' ' + t.artists.map(a => a.name).join(' '))) { seen.add(k); tracks.push(t); }
+    }
+  }
+  if (!pls.length && !tracks.length) return '';
+  return `<section class="local"><h2>In je bibliotheek</h2>
+    ${pls.length ? `<div class="row-scroll">${pls.map(playlistCard).join('')}</div>` : ''}
+    ${tracks.length ? `<div class="grid">${tracks.map(t => card({ go: t.album.id ? 'album:' + t.album.id : '', uri: t.uri, images: t.album.images, name: t.name, sub: t.artists.map(a => a.name).join(', ') })).join('')}</div>` : ''}</section>`;
 }
 
 function searchHistory() {
@@ -1847,18 +1919,22 @@ document.addEventListener('keydown', e => {
   if (e.key === 'f' || e.key === 'F') return $('#lyrics-full').hidden ? openLyricsFull() : ($('#lyrics-full').hidden = true);
   if (e.shiftKey && e.key === 'ArrowRight') return ctl('seek', Math.min(S.dur - 1000, position() + 10000));
   if (e.shiftKey && e.key === 'ArrowLeft') return ctl('seek', Math.max(0, position() - 10000));
-  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && $('#view .tr[data-i]')) {
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && $('#view [data-list]')) {
     e.preventDefault();
-    const rows = $$('#view .tr[data-i]');
-    let i = selRow ? rows.indexOf(selRow) : -1;
-    i = Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
-    selRow?.classList.remove('sel');
-    selRow = rows[i];
-    selRow.classList.add('sel');
-    selRow.scrollIntoView({ block: 'nearest' });
+    let L = selList?.body?.isConnected ? selList : lists.get($('#view [data-list]').dataset.list);
+    if (!L?.shown.length) return;
+    const i = Math.max(0, Math.min(L.shown.length - 1, (L.sel ?? -1) + (e.key === 'ArrowDown' ? 1 : -1)));
+    L.sel = i;
+    selList = L;
+    // In beeld scrollen, ook als die rij nog niet bestaat.
+    const view = $('#view');
+    const rowTop = L.body.getBoundingClientRect().top - view.getBoundingClientRect().top + i * ROW;
+    if (rowTop < 100) view.scrollTop += rowTop - 100;
+    else if (rowTop + ROW > view.clientHeight - 10) view.scrollTop += rowTop + ROW - view.clientHeight + 10;
+    L.paint(true);
     return;
   }
-  if (e.key === 'Enter' && selRow?.isConnected) return playFromList(lists.get(selRow.closest('[data-list]').dataset.list), +selRow.dataset.i);
+  if (e.key === 'Enter' && selList?.body?.isConnected && selList.sel != null) return playFromList(selList, selList.sel);
 });
 
 // ——— thema ———
@@ -1883,6 +1959,7 @@ async function start() {
   const cachedLists = store.get('playlists', null);
   if (cachedLists) renderSide(cachedLists);
   const was = store.get('page', null);
+  restoreScroll = was?.scroll || 0;
   go(was?.where && was.where !== 'settings' ? was.where : 'home', was?.where ? was.arg ?? undefined : undefined, false);
   soft(api('/me')).then(me => { if (me) { S.me = me; store.set('me', me); } });
   myPlaylists(true).then(renderSide).catch(e => toast('Bibliotheek laden lukte niet: ' + e.message));
