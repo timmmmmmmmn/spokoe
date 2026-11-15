@@ -39,10 +39,10 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.SPOTIMFY_KEYSTORE_BASE64 }}
 
       - name: APK bouwen
-        run: ./android/build.sh
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          ./android/build.sh
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
-          JAVA_HOME: ${{ env.JAVA_HOME }}
           SPOTIMFY_KEYSTORE: ${{ runner.temp }}/spotimfy-release.jks
           SPOTIMFY_KEYSTORE_PASSWORD: ${{ secrets.SPOTIMFY_KEYSTORE_PASSWORD }}
           SPOTIMFY_KEY_ALIAS: ${{ secrets.SPOTIMFY_KEY_ALIAS }}
