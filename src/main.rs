@@ -1,4 +1,4 @@
-//! Spotimfy: een snelle Spotify-speler voor de Mac. De Rust-kern speelt zelf af (librespot, als
+//! Spokoe: een snelle Spotify-speler voor de Mac. De Rust-kern speelt zelf af (librespot, als
 //! Spotify Connect-apparaat); de interface is een lokale pagina in een WKWebView.
 
 mod dev;
@@ -30,18 +30,19 @@ impl std::io::Write for Tee {
 
 fn main() {
     let mtm = MainThreadMarker::new().expect("moet op de hoofdthread draaien");
+    player::migrate();
     // Logboek in een bestand (Instellingen › Open logboek), en ook op de terminal.
     let dir = player::data_dir();
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("spotimfy.log");
+    let path = dir.join("spokoe.log");
     if std::fs::metadata(&path).map(|m| m.len() > 2_000_000).unwrap_or(false) {
-        let _ = std::fs::rename(&path, dir.join("spotimfy.vorige.log"));
+        let _ = std::fs::rename(&path, dir.join("spokoe.vorige.log"));
     }
     let file = std::fs::OpenOptions::new().create(true).append(true).open(&path);
     let mut logger = env_logger::Builder::new();
-    logger.parse_filters(&std::env::var("SPOTIMFY_LOG").unwrap_or_else(|_| "warn,librespot=info,spotimfy=info".into()));
+    logger.parse_filters(&std::env::var("SPOKOE_LOG").unwrap_or_else(|_| "warn,librespot=info,spokoe=info".into()));
     if let Ok(file) = file {
-        if std::env::var("SPOTIMFY_DEV").is_err() {
+        if std::env::var("SPOKOE_DEV").is_err() {
             logger.target(env_logger::Target::Pipe(Box::new(file)));
         } else {
             logger.target(env_logger::Target::Pipe(Box::new(Tee(file))));

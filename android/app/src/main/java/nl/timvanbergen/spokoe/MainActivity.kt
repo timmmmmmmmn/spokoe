@@ -1,4 +1,4 @@
-package nl.timvanbergen.spotimfy
+package nl.timvanbergen.spokoe
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -28,7 +28,7 @@ import androidx.core.view.WindowInsetsCompat
 import org.json.JSONObject
 
 /**
- * Spotimfy op Android: dezelfde interface als op de Mac (uit de app zelf, geen internet nodig om
+ * Spokoe op Android: dezelfde interface als op de Mac (uit de app zelf, geen internet nodig om
  * hem te tonen) in een WebView, met de Rust-kern die afspeelt en een dienst voor de achtergrond.
  */
 class MainActivity : ComponentActivity() {
@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
             mediaPlaybackRequiresUserGesture = false
             setSupportZoom(false)
         }
-        web.addJavascriptInterface(Bridge(), "SpotimfyAndroid")
+        web.addJavascriptInterface(Bridge(), "SpokoeAndroid")
         web.webViewClient = object : WebViewClient() {
             // Links naar buiten (Spotify, songteksten) in de browser.
             override fun shouldOverrideUrlLoading(view: WebView, req: WebResourceRequest): Boolean {
@@ -110,7 +110,7 @@ class MainActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 // Eerst de pagina laten sluiten wat open staat; anders naar de achtergrond (de muziek speelt door).
-                web.evaluateJavascript("window.spotimfyBack ? spotimfyBack() : false") { handled ->
+                web.evaluateJavascript("window.spokoeBack ? spokoeBack() : false") { handled ->
                     if (handled != "true") moveTaskToBack(true)
                 }
             }
@@ -140,13 +140,13 @@ class MainActivity : ComponentActivity() {
     private fun loadPage() {
         val read = { name: String -> assets.open(name).bufferedReader().use { it.readText() } }
         val shim = """
-            window.webkit = { messageHandlers: { spotimfy: { postMessage: s => SpotimfyAndroid.post(s) } } };
+            window.webkit = { messageHandlers: { spokoe: { postMessage: s => SpokoeAndroid.post(s) } } };
             document.documentElement.classList.add('mobile', 'android');
         """.trimIndent()
         val html = read("index.html")
             .replace("/*CSS*/", read("app.css"))
             .replace("<script>//JS</script>", "<script>$shim</script><script>${read("app.js")}</script>")
-        web.loadDataWithBaseURL("https://spotimfy.app/", html, "text/html", "utf-8", null)
+        web.loadDataWithBaseURL("https://spokoe.app/", html, "text/html", "utf-8", null)
     }
 
     private var insets = 0f to 0f
@@ -162,7 +162,7 @@ class MainActivity : ComponentActivity() {
             "loggedIn" -> startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
             "play" -> if (msg.optBoolean("playing")) startPlayback()
         }
-        web.evaluateJavascript("window.spotimfy&&spotimfy.recv($text)", null)
+        web.evaluateJavascript("window.spokoe&&spokoe.recv($text)", null)
     }
 
     private fun startPlayback() {
@@ -185,7 +185,7 @@ class MainActivity : ComponentActivity() {
                 "ready" -> runOnUiThread { ready = true; pushInsets(insets.first, insets.second) }
                 "open" -> runOnUiThread { openOutside(msg.optString("url")) }
                 "copy" -> runOnUiThread {
-                    getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Spotimfy", msg.optString("text")))
+                    getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Spokoe", msg.optString("text")))
                 }
                 "saveFile" -> runOnUiThread { pendingSave = msg.optString("text"); saveFile.launch(msg.optString("name")) }
                 "checkUpdate" -> runOnUiThread { Updater.check(this@MainActivity, manual = true) }

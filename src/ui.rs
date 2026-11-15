@@ -61,7 +61,7 @@ pub fn send(msg: Value) {
             *last = Some(msg.to_string());
         }
     }
-    let js = format!("window.spotimfy&&spotimfy.recv({msg})");
+    let js = format!("window.spokoe&&spokoe.recv({msg})");
     dispatch2::DispatchQueue::main().exec_async(move || {
         with_ui(|ui| {
             if ui.ready {
@@ -164,10 +164,10 @@ fn handle(text: &str) {
         }
         "login" => player::send(Cmd::Login),
         "reconnect" => player::send(Cmd::Retry),
-        "devLose" if std::env::var("SPOTIMFY_DEV").is_ok() => player::send(Cmd::DevLose),
+        "devLose" if std::env::var("SPOKOE_DEV").is_ok() => player::send(Cmd::DevLose),
         "check" => player::send(Cmd::Check { deep: true }),
         "openLog" => {
-            let path = player::data_dir().join("spotimfy.log");
+            let path = player::data_dir().join("spokoe.log");
             NSWorkspace::sharedWorkspace().openURL(&NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())));
         }
         "logout" => player::send(Cmd::Logout),
@@ -254,7 +254,7 @@ fn handle(text: &str) {
             std::thread::spawn(move || {
                 let got = reqwest::blocking::Client::new()
                     .get(&url)
-                    .header("User-Agent", "Mozilla/5.0 Spotimfy")
+                    .header("User-Agent", "Mozilla/5.0 Spokoe")
                     .timeout(std::time::Duration::from_secs(10))
                     .send()
                     .and_then(|r| r.text());
@@ -338,7 +338,7 @@ define_class!(
     /// De titelbalk-strook: daarmee sleep je het venster (de pagina ligt eronder).
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "SpotimfyDragStrip"]
+    #[name = "SpokoeDragStrip"]
     struct DragStrip;
 
     impl DragStrip {
@@ -357,7 +357,7 @@ define_class!(
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "SpotimfyHost"]
+    #[name = "SpokoeHost"]
     pub struct Host;
 
     impl Host {
@@ -539,6 +539,7 @@ fn page() -> String {
 }
 
 fn load_page(web: &WKWebView) {
+    // Het adres van de oude naam: daaraan hangt wat de pagina bewaart (geschiedenis, instellingen).
     let base = NSURL::URLWithString(ns_string!("https://spotimfy.app/"));
     unsafe { web.loadHTMLString_baseURL(&NSString::from_str(&page()), base.as_deref()) };
 }
@@ -574,10 +575,10 @@ fn main_menu(mtm: MainThreadMarker, host: &Host) {
     let sep = || NSMenuItem::separatorItem(mtm);
     let bar = NSMenu::new(mtm);
 
-    let quit = plain(mtm, "Stop Spotimfy", Some(sel!(terminate:)), "q");
-    let hide = plain(mtm, "Verberg Spotimfy", Some(sel!(hide:)), "h");
+    let quit = plain(mtm, "Stop Spokoe", Some(sel!(terminate:)), "q");
+    let hide = plain(mtm, "Verberg Spokoe", Some(sel!(hide:)), "h");
     let settings = item(mtm, host, "Instellingen…", "settings", ",", cmd);
-    submenu(mtm, &bar, "Spotimfy", vec![settings, sep(), hide, sep(), quit]);
+    submenu(mtm, &bar, "Spokoe", vec![settings, sep(), hide, sep(), quit]);
 
     submenu(mtm, &bar, "Wijzig", vec![
         plain(mtm, "Herstel", Some(sel!(undo:)), "z"),
@@ -665,10 +666,10 @@ fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Re
     let on = crate::settings::get("island").as_bool().unwrap_or(true);
     island.setState(if on { objc2_app_kit::NSControlStateValueOn } else { objc2_app_kit::NSControlStateValueOff });
     menu.addItem(&island);
-    let show = plain(mtm, "Open Spotimfy", Some(sel!(showWindow:)), "");
+    let show = plain(mtm, "Open Spokoe", Some(sel!(showWindow:)), "");
     unsafe { show.setTarget(Some(host)) };
     menu.addItem(&show);
-    menu.addItem(&plain(mtm, "Stop Spotimfy", Some(sel!(terminate:)), ""));
+    menu.addItem(&plain(mtm, "Stop Spokoe", Some(sel!(terminate:)), ""));
     status.setMenu(Some(&menu));
     (status, now, toggle)
 }
@@ -693,7 +694,7 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
         NSWindow::initWithContentRect_styleMask_backing_defer(mtm.alloc(), frame, style, NSBackingStoreType::Buffered, false)
     };
     unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(ns_string!("Spotimfy"));
+    window.setTitle(ns_string!("Spokoe"));
     window.setTitlebarAppearsTransparent(true);
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setMinSize(CGSize::new(720.0, 520.0));
@@ -705,7 +706,7 @@ pub fn build(mtm: MainThreadMarker, host: &Host) {
 
     let config = unsafe { WKWebViewConfiguration::new(mtm) };
     let content = unsafe { config.userContentController() };
-    unsafe { content.addScriptMessageHandler_name(ProtocolObject::from_ref(host), ns_string!("spotimfy")) };
+    unsafe { content.addScriptMessageHandler_name(ProtocolObject::from_ref(host), ns_string!("spokoe")) };
     // Geluid uit de pagina (voorbeeldjes) mag zonder eerst te klikken.
     unsafe { config.setMediaTypesRequiringUserActionForPlayback(objc2_web_kit::WKAudiovisualMediaTypes::None) };
     // Niet afremmen als het venster achter een ander ligt: timers (slaaptimer, tijdbalk) moeten doorlopen.

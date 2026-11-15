@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Spotimfy"
+rootProject.name = "Spokoe"
 include(":app")

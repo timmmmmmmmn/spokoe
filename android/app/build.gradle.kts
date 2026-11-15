@@ -5,9 +5,9 @@ plugins {
 }
 
 // Ondertekening: op GitHub uit de geheime instellingen, lokaal uit
-// ~/AndroidStudioProjects/spotimfy-release.properties (staat buiten de repo).
+// ~/AndroidStudioProjects/spokoe-release.properties (staat buiten de repo).
 val localSigning = Properties().apply {
-    val file = File(System.getProperty("user.home"), "AndroidStudioProjects/spotimfy-release.properties")
+    val file = File(System.getProperty("user.home"), "AndroidStudioProjects/spokoe-release.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
 fun signing(name: String): String? = System.getenv(name) ?: localSigning.getProperty(name)
@@ -16,13 +16,13 @@ fun signing(name: String): String? = System.getenv(name) ?: localSigning.getProp
 val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
 
 android {
-    namespace = "nl.timvanbergen.spotimfy"
+    namespace = "nl.timvanbergen.spokoe"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "nl.timvanbergen.spotimfy"
+        applicationId = "nl.timvanbergen.spokoe"
         minSdk = 26
         targetSdk = 37
         versionCode = buildNumber
@@ -33,10 +33,10 @@ android {
 
     signingConfigs {
         create("release") {
-            signing("SPOTIMFY_KEYSTORE")?.let { storeFile = file(it) }
-            storePassword = signing("SPOTIMFY_KEYSTORE_PASSWORD")
-            keyAlias = signing("SPOTIMFY_KEY_ALIAS")
-            keyPassword = signing("SPOTIMFY_KEY_PASSWORD")
+            signing("SPOKOE_KEYSTORE")?.let { storeFile = file(it) }
+            storePassword = signing("SPOKOE_KEYSTORE_PASSWORD")
+            keyAlias = signing("SPOKOE_KEY_ALIAS")
+            keyPassword = signing("SPOKOE_KEY_PASSWORD")
         }
     }
 

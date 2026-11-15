@@ -1,20 +1,21 @@
 'use strict';
-// Spotimfy: de interface. Afspelen gebeurt in de Rust-kern (post → webkit), bibliotheek en zoeken
+// Spokoe: de interface. Afspelen gebeurt in de Rust-kern (post → webkit), bibliotheek en zoeken
 // via de Web API (rechtstreeks met fetch, met een token van de kern).
 
 // Fouten in de pagina naar het log van de app.
-addEventListener('error', e => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd: 'log', msg: `${e.message} (regel ${e.lineno})` })));
-addEventListener('unhandledrejection', e => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd: 'log', msg: 'promise: ' + (e.reason?.message || e.reason) })));
+addEventListener('error', e => window.webkit?.messageHandlers?.spokoe?.postMessage(JSON.stringify({ cmd: 'log', msg: `${e.message} (regel ${e.lineno})` })));
+addEventListener('unhandledrejection', e => window.webkit?.messageHandlers?.spokoe?.postMessage(JSON.stringify({ cmd: 'log', msg: 'promise: ' + (e.reason?.message || e.reason) })));
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const post = (cmd, o = {}) => window.webkit?.messageHandlers?.spotimfy?.postMessage(JSON.stringify({ cmd, ...o }));
+const post = (cmd, o = {}) => window.webkit?.messageHandlers?.spokoe?.postMessage(JSON.stringify({ cmd, ...o }));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const fmt = ms => {
   if (!(ms >= 0)) return '0:00';
   const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, r = String(s % 60).padStart(2, '0');
   return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
 };
+// Opslag onder de oude naam "spotimfy:", zodat geschiedenis en instellingen bewaard blijven.
 const store = {
   get(k, d) { try { const v = localStorage.getItem('spotimfy:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('spotimfy:' + k, JSON.stringify(v)); } catch {} },
@@ -46,7 +47,7 @@ function rpc(cmd, extra = {}) {
   });
 }
 
-window.spotimfy = {
+window.spokoe = {
   recv(m) {
     switch (m.type) {
       case 'token': case 'lyrics': case 'meta': case 'audioInfo': case 'fetchText': case 'update': {
@@ -57,7 +58,7 @@ window.spotimfy = {
         return;
       }
       case 'config':
-        S.clientId = m.clientId || ''; S.redirect = m.redirect; S.deviceName = m.deviceName || 'Spotimfy op deze Mac';
+        S.clientId = m.clientId || ''; S.redirect = m.redirect; S.deviceName = m.deviceName || 'Spokoe op deze Mac';
         if (m.platform === 'android' && !S.androidInit) { S.androidInit = true; post('volume', { v: 1 }); }
         return;
       case 'status': return onStatus(m);
@@ -112,7 +113,7 @@ function onStatus(m) {
       login.hidden = false;
       $('#login-btn').disabled = true;
       $('#login-btn').textContent = 'Wachten op verbinding…';
-      $('#login-msg').textContent = 'Spotimfy kan Spotify nu niet bereiken. Zodra je internet het weer doet, gaat het vanzelf verder.';
+      $('#login-msg').textContent = 'Spokoe kan Spotify nu niet bereiken. Zodra je internet het weer doet, gaat het vanzelf verder.';
     } else {
       // Bewaren wat er speelde, om straks verder te gaan.
       if (!S.offline) S.lost = { ctx: S.ctx, track: S.track, pos: Math.round(position()), playing: S.playing && S.local };
@@ -357,7 +358,7 @@ function onTrack(t, local) {
     if (local && S.mix) setTimeout(mixRefill, 1500);
     checkLiked([t]);
     lyricsFor(t);
-    if (S.panel === 'queue') renderQueue();
+    if (S.panel === 'queue') setTimeout(renderQueue, 600);
     // Volledige gegevens (album-id, artiest-id's) via de Web API.
     if (local && t.uri.startsWith('spotify:track:')) {
       soft(get(`/tracks/${idOf(t.uri)}`, 3600000)).then(full => {
@@ -388,7 +389,7 @@ function renderTrack() {
   $('#np-like').hidden = !t;
   renderLike();
   $('#t-dur').textContent = fmt(S.dur);
-  document.title = t ? `${t.name} · ${t.artists.map(a => a.name).join(', ')}` : 'Spotimfy';
+  document.title = t ? `${t.name} · ${t.artists.map(a => a.name).join(', ')}` : 'Spokoe';
   if (t) {
     const big = pic(t.album.images, 640);
     $('.lf-bg').style.backgroundImage = `url("${big}")`;
@@ -990,7 +991,7 @@ function trackMenu(x, y, t, playFn, L) {
 }
 
 // ——— eigen wachtrij ———
-// Spotify laat apps de wachtrij niet herschikken. Daarom houdt Spotimfy zelf de wachtrij bij en
+// Spotify laat apps de wachtrij niet herschikken. Daarom houdt Spokoe zelf de wachtrij bij en
 // zet steeds precies één nummer klaar bij Spotify; de rest kun je slepen, weghalen en bewaren.
 // Jouw nummers gaan altijd voor wat de mix automatisch aanvult.
 const Q = {
@@ -1309,7 +1310,7 @@ async function myPlaylists(fresh) {
   store.set('playlists', myPlaylists.list.map(p => ({ id: p.id, uri: p.uri, name: p.name, images: (p.images || []).slice(-1), owner: { id: p.owner?.id, display_name: p.owner?.display_name }, collaborative: p.collaborative })));
   return myPlaylists.list;
 }
-/** De zijbalk: vastgezet, mappen (van Spotify en van Spotimfy), dan de rest in de volgorde van je bibliotheek. */
+/** De zijbalk: vastgezet, mappen (van Spotify en van Spokoe), dan de rest in de volgorde van je bibliotheek. */
 function renderSide(list) {
   list = list || myPlaylists.list || store.get('playlists', []);
   const byUri = new Map(list.map(p => [p.uri, p]));
@@ -1454,8 +1455,8 @@ function canDrop(b) {
   return p && (p.owner?.id === S.me?.id || p.collaborative);
 }
 
-// ——— gemaakt voor jou (door Spotimfy) ———
-// Spotify geeft zijn eigen Daily Mixes niet meer aan nieuwe apps; deze maakt Spotimfy zelf.
+// ——— gemaakt voor jou (door Spokoe) ———
+// Spotify geeft zijn eigen Daily Mixes niet meer aan nieuwe apps; deze maakt Spokoe zelf.
 const weekNo = () => Math.floor((Date.now() / 864e5 + 3) / 7);
 const MADE = {
   async daily() {
@@ -1506,7 +1507,7 @@ const MADE = {
 };
 const SMART = {
   'deze-maand': ['Deze maand leuk gevonden', 'Wat je de afgelopen 30 dagen liked', ts => ts.filter(t => t.added && Date.now() - t.added < 30 * 864e5)],
-  'nooit-gespeeld': ['Leuk, maar nooit gespeeld', 'Liked songs die je in Spotimfy nog niet hoorde', ts => { const h = new Set(store.get('hist', []).map(x => x.uri)); return ts.filter(t => !h.has(t.uri)); }],
+  'nooit-gespeeld': ['Leuk, maar nooit gespeeld', 'Liked songs die je in Spokoe nog niet hoorde', ts => { const h = new Set(store.get('hist', []).map(x => x.uri)); return ts.filter(t => !h.has(t.uri)); }],
   'pareltjes': ['Vergeten pareltjes', 'Meer dan een jaar geleden liked', ts => ts.filter(t => t.added && Date.now() - t.added > 365 * 864e5).sort(() => Math.random() - 0.5).slice(0, 100)],
 };
 
@@ -1529,7 +1530,7 @@ const views = {
     const daily = key.startsWith('daily') ? (await MADE.daily())[+key.slice(5)] : null;
     const title = daily?.name || { weekly: 'Ontdek wekelijks', radar: 'Releaseradar' }[key] || 'Mix';
     const sub = daily ? `Met ${daily.sub} en meer` : key === 'weekly' ? 'Nummers die je nog nooit hoorde, gekozen op jouw smaak. Elke week nieuw.' : 'Nieuwe albums en singles van artiesten die je volgt of veel hoort.';
-    el.innerHTML = `<div class="hero"><div class="cover made-cover big" style="--h:${daily ? (key.slice(5) * 70 + 200) % 360 : key === 'weekly' ? 80 : 140}"><span>${esc(title)}</span></div><div><div class="kind">Gemaakt voor jou door Spotimfy</div><h1>${esc(title)}</h1><div class="desc">${esc(sub)}</div></div></div>
+    el.innerHTML = `<div class="hero"><div class="cover made-cover big" style="--h:${daily ? (key.slice(5) * 70 + 200) % 360 : key === 'weekly' ? 80 : 140}"><span>${esc(title)}</span></div><div><div class="kind">Gemaakt voor jou door Spokoe</div><h1>${esc(title)}</h1><div class="desc">${esc(sub)}</div></div></div>
       <div class="actions"><button class="big-play" id="m-play">${icon('play')}</button><button class="pill" id="m-save">Bewaar als playlist</button><button class="pill" id="m-new">Vernieuwen</button></div><div id="m-list"><div class="loading-more">Wordt gemaakt…</div></div>`;
     $('#top-title').textContent = title;
     const tracks = await MADE.build(key);
@@ -1816,13 +1817,13 @@ const views = {
       <section id="st-time"></section><section id="st-artists"></section><section id="st-tracks"></section>`;
     $$('#st-range button', el).forEach(b => b.classList.toggle('on', b.dataset.r === range));
     $('#st-range', el).onclick = e => { const b = e.target.closest('button'); if (b) { cur.arg = b.dataset.r; views.stats(el, b.dataset.r, alive); } };
-    // Wat Spotimfy zelf heeft bijgehouden.
+    // Wat Spokoe zelf heeft bijgehouden.
     const time = store.get('time', {});
     const days = [...Array(7)].map((_, i) => { const d = new Date(Date.now() - (6 - i) * 864e5); return { k: d.toISOString().slice(0, 10), label: d.toLocaleDateString('nl-NL', { weekday: 'long' }) }; });
     const max = Math.max(60, ...days.map(d => time[d.k] || 0));
     const week = days.reduce((s, d) => s + (time[d.k] || 0), 0);
     const at = Object.entries(store.get('artistTime', {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
-    $('#st-time', el).innerHTML = `<h2>Luistertijd in Spotimfy <span class="sub" style="font-size:13px;font-weight:500">${Math.round(week / 60)} minuten deze week</span></h2>
+    $('#st-time', el).innerHTML = `<h2>Luistertijd in Spokoe <span class="sub" style="font-size:13px;font-weight:500">${Math.round(week / 60)} minuten deze week</span></h2>
       <div class="bars">${days.map(d => `<div><span>${d.label}</span><i style="width:${Math.max(2, (time[d.k] || 0) / max * 100)}%"></i><span>${Math.round((time[d.k] || 0) / 60)}m</span></div>`).join('')}</div>
       ${at.length ? `<p class="sub" style="margin-top:14px">Meest gedraaid: ${at.map(([n, s]) => `<b style="color:var(--ink)">${esc(n)}</b> (${Math.round(s / 60)}m)`).join(', ')}</p>` : ''}`;
     const [ar, tr] = await Promise.all([soft(get(`/me/top/artists?time_range=${range}&limit=20`, 3600000)), soft(get(`/me/top/tracks?time_range=${range}&limit=50`, 3600000))]);
@@ -1844,26 +1845,26 @@ const views = {
     $('#top-title').textContent = 'Instellingen';
     const theme = store.get('theme', 'system');
     el.innerHTML = `<h1 class="page">Instellingen</h1><div class="settings">
-      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Dit apparaat heet in Spotify Connect <b style="color:var(--ink)">${esc(S.deviceName || 'Spotimfy')}</b>.</p>
+      <div class="box"><h3>Account</h3><p>Ingelogd als <b style="color:var(--ink)">${esc(S.me?.display_name || S.user || '')}</b>${S.me?.product ? ` (${esc(S.me.product)})` : ''}. Dit apparaat heet in Spotify Connect <b style="color:var(--ink)">${esc(S.deviceName || 'Spokoe')}</b>.</p>
         <div class="field"><button class="ghost" id="set-logout">Uitloggen</button></div></div>
       <div class="box"><h3>Eigen Client ID</h3>
-        <p>Voor de bibliotheek, zoeken en statistieken gebruikt Spotimfy de Web API. Met een eigen app in het Spotify-dashboard heb je daar een eigen limiet voor.</p>
+        <p>Voor de bibliotheek, zoeken en statistieken gebruikt Spokoe de Web API. Met een eigen app in het Spotify-dashboard heb je daar een eigen limiet voor.</p>
         <ol><li>Ga naar <a class="link" style="color:var(--accent)" href="https://developer.spotify.com/dashboard">developer.spotify.com/dashboard</a> en kies <b>Create app</b>.</li>
         <li>Redirect URI: <code>${esc(S.redirect || 'http://127.0.0.1:8888/callback')}</code>, en vink <b>Web API</b> aan.</li>
         <li>Kopieer het <b>Client ID</b> hieronder. De eerste keer opent je browser één keer om toestemming te vragen.</li></ol>
         <div class="field"><input id="set-cid" placeholder="Client ID (leeg = ingebouwd)" value="${esc(S.clientId)}" spellcheck="false"><button class="primary" id="set-save">Opslaan</button></div></div>
-      <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="dark">Spotimfy</button><button data-t="light">Licht</button><button data-t="vinyl">Vinyl</button><button data-t="vinyl-dark">Vinyl donker</button></div>
-        <p style="margin-top:10px">De vinyl-thema's geven Spotimfy de sfeer van een platenkast: papier of notenhout, schreefletters, en wat er speelt draait als plaat.</p></div>
-      <div class="box"><h3>Mixen en shuffle</h3><p>Hoe Spotimfy kiest als je geen playlist luistert, en bij slim shuffelen.</p>
+      <div class="box"><h3>Uiterlijk</h3><div class="seg" id="set-theme"><button data-t="system">Systeem</button><button data-t="dark">Spokoe</button><button data-t="light">Licht</button><button data-t="vinyl">Vinyl</button><button data-t="vinyl-dark">Vinyl donker</button></div>
+        <p style="margin-top:10px">De vinyl-thema's geven Spokoe de sfeer van een platenkast: papier of notenhout, schreefletters, en wat er speelt draait als plaat.</p></div>
+      <div class="box"><h3>Mixen en shuffle</h3><p>Hoe Spokoe kiest als je geen playlist luistert, en bij slim shuffelen.</p>
         <div class="row-set"><span>Vertrouwd</span><input type="range" id="set-balance" min="0" max="1" step="0.05" value="${store.get('mixBalance', 0.5)}"><b>Ontdekken</b></div></div>
       <div class="box" id="audio-box"><h3>Geluid</h3><div class="empty" style="padding:10px 0">Laden…</div></div>
-      <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spotimfy niet voorop staat.</p>
+      <div class="box"><h3>Eiland</h3><p>Bij een nieuw nummer schuift bovenaan je scherm even een pil in met de hoes en de titel, als Spokoe niet voorop staat.</p>
         <div class="seg" id="set-island"><button data-v="1">Aan</button><button data-v="0">Uit</button></div></div>
       <div class="box"><h3>Sneltoetsen</h3><p>
         <kbd>spatie</kbd> afspelen/pauzeren · <kbd>⌘K</kbd> of <kbd>/</kbd> zoeken · <kbd>⌘→</kbd> <kbd>⌘←</kbd> volgende/vorige · <kbd>⇧→</kbd> <kbd>⇧←</kbd> 10 s verder/terug ·
         <kbd>⌘↑</kbd> <kbd>⌘↓</kbd> volume · <kbd>⌘L</kbd> songtekst · <kbd>⌘J</kbd> wachtrij · <kbd>⌘D</kbd> vind ik leuk · <kbd>⌘S</kbd> shuffle · <kbd>F</kbd> Nu speelt · <kbd>⌥⌘M</kbd> minispeler · sleep nummers naar een playlist in de zijbalk</p></div>
-      <div class="box"><h3>Bijwerken</h3><p id="upd-text">Spotimfy kijkt één keer per dag of er een nieuwe versie is.</p><div class="field"><button class="ghost" id="upd-check">Zoek nu naar updates</button><button class="primary" id="upd-go" hidden>Bijwerken en opnieuw openen</button></div></div>
-      <div class="box"><h3>Over Spotimfy</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
+      <div class="box"><h3>Bijwerken</h3><p id="upd-text">Spokoe kijkt één keer per dag of er een nieuwe versie is.</p><div class="field"><button class="ghost" id="upd-check">Zoek nu naar updates</button><button class="primary" id="upd-go" hidden>Bijwerken en opnieuw openen</button></div></div>
+      <div class="box"><h3>Over Spokoe</h3><p>Een eigen speler voor Spotify Premium, gebouwd in Rust met librespot. Liedjes die je vaker draait worden lokaal bewaard (tot 2 GB), zodat ze meteen beginnen.</p></div>
     </div>`;
     $$('#set-theme button', el).forEach(b => b.classList.toggle('on', b.dataset.t === theme));
     const segPick = (id, key, cur, toVal) => {
@@ -2247,7 +2248,7 @@ async function smartShuffle(uri, tracks) {
   toast(`Slim geshuffeld: ${Math.min(700, out.length)} nummers`);
 }
 
-/** Zoeken in wat Spotimfy al weet: je playlists en de nummers daarin. */
+/** Zoeken in wat Spokoe al weet: je playlists en de nummers daarin. */
 function localSearch(q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return '';
@@ -2296,15 +2297,25 @@ async function renderQueue() {
   const from = S.mix?.label || (S.ctx && ((myPlaylists.list || []).find(p => p.uri === S.ctx)?.name || $('.hero h1')?.textContent));
   const mine = Q.items.map((t, i) => ({ t, i })).filter(x => !x.t.auto), auto = Q.items.map((t, i) => ({ t, i })).filter(x => x.t.auto);
   const item = ({ t, i }) => `<div class="q qi" data-qi="${i}" data-uri="${esc(t.uri)}" draggable="true">${img(t.album?.images, 64)}<div><div class="t">${esc(t.name)}</div><div class="a">${esc(t.artists.map(a => a.name).join(', '))}</div></div><button class="icon q-x" data-qx="${i}" title="Uit de wachtrij">${icon('x')}</button></div>`;
+  // Wat Spotify daarna speelt (uit de playlist, het album of de mix), zonder wat hierboven al staat.
+  const own = new Set([S.track, Q.ready, ...Q.items].filter(Boolean).map(songKey));
+  const upcoming = (await soft(api('/me/player/queue')))?.queue?.map(t => norm(t)).filter(t => t && !own.has(songKey(t))) || [];
+  if (S.panel !== 'queue') return;
+  const seenUp = new Set();
+  const later = upcoming.filter(t => !seenUp.has(songKey(t)) && seenUp.add(songKey(t))).slice(0, 30);
   body.innerHTML = `<h4>Speelt nu${from ? ` · ${esc(from)}` : ''}</h4>${row(S.track, ' now')}
     ${Q.ready ? `<h4>Staat klaar</h4>${row(Q.ready)}` : ''}
     <h4 class="q-head">Jouw wachtrij ${mine.length ? `<span><button class="link" id="q-share">Delen</button> · <button class="link" id="q-save">Bewaar als playlist</button> · <button class="link" id="q-clear">Wissen</button></span>` : ''}</h4>
     ${mine.map(item).join('') || '<div class="q-empty">Rechtsklik op een nummer › Speel hierna, of sleep een nummer hierheen.</div>'}
-    ${auto.length ? `<h4>Daarna${S.mix ? ' · mix' : ''}</h4>${auto.slice(0, 30).map(item).join('')}` : ''}`;
-  const all = [S.track, Q.ready, ...Q.items];
+    ${auto.length ? `<h4>Daarna${S.mix ? ' · mix' : ''}</h4>${auto.slice(0, 30).map(item).join('')}` : ''}
+    ${later.length ? `<h4>Daarna${from ? ` uit ${esc(from)}` : ''}</h4>${later.map(t => row(t, ' later')).join('')}` : ''}
+    ${!mine.length && !auto.length && !later.length && !Q.ready ? '<div class="empty">Na dit nummer stopt het afspelen.</div>' : ''}`;
+  const all = [S.track, Q.ready, ...Q.items, ...later];
   $$('.q', body).forEach(el => { el._track = Q.items[+el.dataset.qi] || all.find(t => t?.uri === el.dataset.uri); });
   $$('[data-qx]', body).forEach(b => b.onclick = e => { e.stopPropagation(); Q.items.splice(+b.dataset.qx, 1); Q.save(); });
   $$('.qi', body).forEach(el => el.ondblclick = () => { const t = Q.items.splice(+el.dataset.qi, 1)[0]; Q.save(); play({ tracks: [t.uri] }); });
+  // Een nummer verderop: zoveel keer volgende tot je er bent.
+  $$('.q.later', body).forEach((el, i) => el.ondblclick = async () => { const skips = (Q.ready ? 1 : 0) + Q.items.filter(x => !x.auto).length + i + 1; for (let k = 0; k < skips; k++) { post('next'); await sleep(120); } });
   const mineTracks = () => Q.items.filter(x => !x.auto);
   $('#q-clear')?.addEventListener('click', () => { Q.items = Q.items.filter(x => x.auto); Q.save(); });
   $('#q-save')?.addEventListener('click', () => newPlaylist(mineTracks().map(t => t.uri), 'Wachtrij ' + new Date().toLocaleDateString('nl-NL')));
@@ -2622,7 +2633,7 @@ document.addEventListener('keydown', e => {
 });
 
 /** Terugknop (Android): eerst sluiten wat open staat, dan een pagina terug. */
-window.spotimfyBack = () => {
+window.spokoeBack = () => {
   const ask = $('#ask');
   if (ask) { ask.remove(); return true; }
   if (!$('#menu').hidden || !$('#palette').hidden) { closeOverlays(); return true; }
@@ -2665,7 +2676,7 @@ async function start() {
   if (Date.now() - store.get('updCheck', 0) > 864e5) setTimeout(async () => {
     store.set('updCheck', Date.now());
     const u = (await rpc('checkUpdate').catch(() => ({}))).data;
-    if (u?.newer && u.url) toast(`Spotimfy ${u.latest} is er: Instellingen › Bijwerken`);
+    if (u?.newer && u.url) toast(`Spokoe ${u.latest} is er: Instellingen › Bijwerken`);
   }, 8000);
   pollRemote(true);
   renderModes();

@@ -1,7 +1,7 @@
-# Spotimfy
+# Spokoe
 
 Een eigen, snelle Spotify-speler voor de Mac en Android (Spotify Premium nodig).
-De kern is Rust ([librespot](https://github.com/librespot-org/librespot)): Spotimfy speelt zelf af
+De kern is Rust ([librespot](https://github.com/librespot-org/librespot)): Spokoe speelt zelf af
 en is een Spotify Connect-apparaat. De interface is één gedeelde pagina (`ui/`).
 
 **Wat het anders doet dan de officiële app**
@@ -13,10 +13,10 @@ en is een Spotify Connect-apparaat. De interface is één gedeelde pagina (`ui/`
 - Songteksten die meelopen, Nu speelt, minispeler, eiland, ⌘K-opdrachtbalk, vinyl-thema's
 
 ## Bouwen
-- **Mac:** `./install.sh` (zet Spotimfy.app in /Applications)
+- **Mac:** `./install.sh` (zet Spokoe.app in /Applications)
 - **Android:** `android/build.sh` (Rust-kern via cargo-ndk, daarna de APK)
 
 Releases: een tag `v*` maakt een Mac-zip, een push naar `main` een Android-APK. Beide apps
 werken zichzelf bij vanaf de releases in deze repo.
 
-Spotimfy is een privéproject en niet verbonden aan Spotify.
+Spokoe is een privéproject en niet verbonden aan Spotify.

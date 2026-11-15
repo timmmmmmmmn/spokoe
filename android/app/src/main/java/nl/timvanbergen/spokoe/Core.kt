@@ -1,4 +1,4 @@
-package nl.timvanbergen.spotimfy
+package nl.timvanbergen.spokoe
 
 import android.content.Context
 import org.json.JSONObject
@@ -8,7 +8,7 @@ import org.json.JSONObject
  * [post]; gebeurtenissen komen eruit via [next], dat in een eigen thread steeds wordt aangeroepen.
  */
 object Core {
-    init { System.loadLibrary("spotimfy_core") }
+    init { System.loadLibrary("spokoe_core") }
 
     @JvmStatic private external fun start(dir: String)
     @JvmStatic external fun post(json: String)
@@ -30,7 +30,7 @@ object Core {
                 val msg = try { JSONObject(text) } catch (_: Exception) { continue }
                 synchronized(listeners) { listeners.toList() }.forEach { it(msg, text) }
             }
-        }, "spotimfy-events").apply { isDaemon = true }.start()
+        }, "spokoe-events").apply { isDaemon = true }.start()
     }
 
     fun listen(l: (JSONObject, String) -> Unit) = synchronized(listeners) { listeners += l }

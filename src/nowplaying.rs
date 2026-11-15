@@ -1,5 +1,5 @@
 //! "Nu speelt" van macOS: titel en hoes in het Bedieningspaneel, en de mediatoetsen
-//! (▶︎⏸ ⏭ ⏮ op het toetsenbord, AirPods) bedienen Spotimfy.
+//! (▶︎⏸ ⏭ ⏮ op het toetsenbord, AirPods) bedienen Spokoe.
 
 use std::cell::RefCell;
 use std::ptr::NonNull;

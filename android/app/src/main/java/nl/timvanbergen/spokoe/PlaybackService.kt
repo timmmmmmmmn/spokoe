@@ -1,4 +1,4 @@
-package nl.timvanbergen.spotimfy
+package nl.timvanbergen.spokoe
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -46,7 +46,7 @@ class PlaybackService : Service() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "Afspelen", NotificationManager.IMPORTANCE_LOW).apply {
             setShowBadge(false)
         })
-        session = MediaSessionCompat(this, "Spotimfy").apply {
+        session = MediaSessionCompat(this, "Spokoe").apply {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() = Core.cmd("resume")
                 override fun onPause() = Core.cmd("pause")
@@ -128,8 +128,8 @@ class PlaybackService : Service() {
 
     private fun goForeground() {
         val n: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_stat_spotimfy)
-            .setContentTitle(title.ifEmpty { "Spotimfy" })
+            .setSmallIcon(R.drawable.ic_stat_spokoe)
+            .setContentTitle(title.ifEmpty { "Spokoe" })
             .setContentText(artist)
             .setLargeIcon(cover)
             .setContentIntent(openApp())

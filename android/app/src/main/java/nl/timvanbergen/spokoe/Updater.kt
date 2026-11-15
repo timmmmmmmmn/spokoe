@@ -1,4 +1,4 @@
-package nl.timvanbergen.spotimfy
+package nl.timvanbergen.spokoe
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -24,8 +24,8 @@ import java.net.URL
 object Updater {
 
     // Mac- en Android-versies staan in dezelfde repo; Android neemt de nieuwste release met een .apk.
-    private const val LATEST = "https://api.github.com/repos/timmmmmmmmn/spotimfy/releases?per_page=30"
-    private const val PREFS = "spotimfy-update"
+    private const val LATEST = "https://api.github.com/repos/timmmmmmmmn/spokoe/releases?per_page=30"
+    private const val PREFS = "spokoe-update"
     private const val CHECK_EVERY = 6 * 60 * 60 * 1000L
 
     private data class Release(val code: Long, val name: String, val notes: String, val url: String)
@@ -84,7 +84,7 @@ object Updater {
             conn.connectTimeout = 10_000
             conn.readTimeout = 15_000
             conn.setRequestProperty("Accept", "application/vnd.github+json")
-            conn.setRequestProperty("User-Agent", "SpotimfyApp")
+            conn.setRequestProperty("User-Agent", "SpokoeApp")
             if (conn.responseCode != 200) return null
             val list = org.json.JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
             val json = (0 until list.length()).map { list.getJSONObject(it) }.firstOrNull { it.optString("tag_name").startsWith("android-") } ?: return null
@@ -107,7 +107,7 @@ object Updater {
         val notes = release.notes.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
         AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Nieuwe versie ${release.name}")
-            .setMessage(if (notes.isNotEmpty()) "Wat is er nieuw: $notes" else "Er staat een nieuwe versie van Spotimfy klaar.")
+            .setMessage(if (notes.isNotEmpty()) "Wat is er nieuw: $notes" else "Er staat een nieuwe versie van Spokoe klaar.")
             .setPositiveButton("Bijwerken") { _, _ -> start(activity, release) }
             .setNegativeButton("Later", null)
             .show()
@@ -115,11 +115,11 @@ object Updater {
 
     private fun start(activity: Activity, release: Release) {
         if (!activity.packageManager.canRequestPackageInstalls()) {
-            // Eenmalig: Android vraagt of Spotimfy apps mag installeren (alleen voor zijn eigen updates).
+            // Eenmalig: Android vraagt of Spokoe apps mag installeren (alleen voor zijn eigen updates).
             waitingForPermission = release
             AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Toestemming nodig")
-                .setMessage("Zet in het volgende scherm \"Toestaan van deze bron\" aan, zodat Spotimfy zichzelf kan bijwerken. Daarna gaat de update vanzelf verder.")
+                .setMessage("Zet in het volgende scherm \"Toestaan van deze bron\" aan, zodat Spokoe zichzelf kan bijwerken. Daarna gaat de update vanzelf verder.")
                 .setPositiveButton("Naar instellingen") { _, _ ->
                     activity.startActivity(
                         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}"))
@@ -140,11 +140,11 @@ object Updater {
             .setCancelable(false)
             .show()
         Thread {
-            val file = File(activity.cacheDir, "spotimfy-update.apk")
+            val file = File(activity.cacheDir, "spokoe-update.apk")
             val ok = try {
                 val conn = URL(release.url).openConnection() as HttpURLConnection
                 conn.instanceFollowRedirects = true
-                conn.setRequestProperty("User-Agent", "SpotimfyApp")
+                conn.setRequestProperty("User-Agent", "SpokoeApp")
                 conn.connectTimeout = 15_000
                 conn.readTimeout = 60_000
                 conn.inputStream.use { input -> file.outputStream().use { input.copyTo(it) } }
@@ -165,14 +165,14 @@ object Updater {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(context.packageName)
-            // Vanaf Android 12 kunnen volgende updates zonder extra bevestiging (als Spotimfy zelf de vorige installeerde).
+            // Vanaf Android 12 kunnen volgende updates zonder extra bevestiging (als Spokoe zelf de vorige installeerde).
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
             }
         }
         val id = installer.createSession(params)
         installer.openSession(id).use { session ->
-            session.openWrite("spotimfy.apk", 0, apk.length()).use { out ->
+            session.openWrite("spokoe.apk", 0, apk.length()).use { out ->
                 apk.inputStream().use { it.copyTo(out) }
                 session.fsync(out)
             }

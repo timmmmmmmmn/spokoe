@@ -1,5 +1,5 @@
 //! Het eiland: bij een nieuw nummer schuift bovenaan het scherm (onder de notch) even een zwarte
-//! pil in met de hoes, de titel en de artiest. Alleen als Spotimfy niet voorop staat.
+//! pil in met de hoes, de titel en de artiest. Alleen als Spokoe niet voorop staat.
 
 use std::cell::{Cell, RefCell};
 
@@ -28,10 +28,10 @@ thread_local! {
 }
 
 define_class!(
-    /// Klikken op de pil opent Spotimfy.
+    /// Klikken op de pil opent Spokoe.
     #[unsafe(super(NSView))]
     #[thread_kind = MainThreadOnly]
-    #[name = "SpotimfyIslandView"]
+    #[name = "SpokoeIslandView"]
     struct IslandView;
 
     impl IslandView {
@@ -88,7 +88,7 @@ fn build(mtm: MainThreadMarker) -> Island {
     title.setFrame(CGRect::new(CGPoint::new(68.0, 32.0), CGSize::new(W - 68.0 - 46.0, 19.0)));
     let artist = label(mtm, 12.5, false, 0.6);
     artist.setFrame(CGRect::new(CGPoint::new(68.0, 13.0), CGSize::new(W - 68.0 - 46.0, 17.0)));
-    // Rechts het icoontje van Spotimfy, zoals bij het echte eiland.
+    // Rechts het icoontje van Spokoe, zoals bij het echte eiland.
     let mark = NSImageView::initWithFrame(mtm.alloc(), CGRect::new(CGPoint::new(W - 40.0, 20.0), CGSize::new(24.0, 24.0)));
     if let Some(img) = NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str("waveform"), None) {
         mark.setImage(Some(&img));

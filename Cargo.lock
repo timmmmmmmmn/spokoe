@@ -2930,7 +2930,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "spotimfy"
+name = "spokoe"
 version = "0.2.0"
 dependencies = [
  "block2",

@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.Spotimfy" parent="android:Theme.Material.NoActionBar">
+    <style name="Theme.Spokoe" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/page_bg</item>
         <item name="android:colorAccent">@color/brand</item>
     </style>

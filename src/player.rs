@@ -1,5 +1,5 @@
-//! De afspeler: librespot als Spotify Connect-apparaat ("Spotimfy op deze Mac"), plus de
-//! tokens voor de Web API. Spotimfyt op een eigen tokio-thread; praat met de pagina via `ui::send`.
+//! De afspeler: librespot als Spotify Connect-apparaat ("Spokoe op deze Mac"), plus de
+//! tokens voor de Web API. Spokoet op een eigen tokio-thread; praat met de pagina via `ui::send`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -43,9 +43,9 @@ const SCOPES: &[&str] = &[
 
 /// Zo heet dit apparaat in Spotify Connect.
 #[cfg(target_os = "android")]
-pub const DEVICE_NAME: &str = "Spotimfy op deze telefoon";
+pub const DEVICE_NAME: &str = "Spokoe op deze telefoon";
 #[cfg(not(target_os = "android"))]
-pub const DEVICE_NAME: &str = "Spotimfy op deze Mac";
+pub const DEVICE_NAME: &str = "Spokoe op deze Mac";
 
 /// Het adres dat je bij je eigen app in het Spotify-dashboard invult.
 pub const REDIRECT: &str = "http://127.0.0.1:8888/callback";
@@ -95,15 +95,23 @@ pub fn data_dir() -> PathBuf {
         return dir.clone();
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Library/Application Support/Spotimfy")
+    PathBuf::from(home).join("Library/Application Support/Spokoe")
+}
+
+/// Van de eerdere namen (Draai, Spotimfy): login, cache en instellingen meenemen.
+/// Vóór al het andere aanroepen, anders bestaat de nieuwe map al (bijv. door het logboek).
+pub fn migrate() {
+    for name in ["Spotimfy", "Draai"] {
+        let old = data_dir().with_file_name(name);
+        let fresh = !data_dir().join("credentials.json").exists();
+        if old.join("credentials.json").exists() && fresh {
+            let _ = std::fs::remove_dir_all(data_dir());
+            let _ = std::fs::rename(&old, data_dir());
+        }
+    }
 }
 
 pub fn start() {
-    // Van de werknaam Draai: login en cache meenemen.
-    let old = data_dir().with_file_name("Draai");
-    if old.exists() && !data_dir().exists() {
-        let _ = std::fs::rename(&old, data_dir());
-    }
     let (tx, rx) = unbounded_channel();
     let _ = TX.set(tx);
     std::thread::spawn(move || {
@@ -193,7 +201,10 @@ async fn connect(st: &mut State, browser: bool) -> bool {
             return false;
         }
     };
-    let session_config = SessionConfig::default();
+    let mut session_config = SessionConfig::default();
+    // Overal het Client ID van de desktop-app: dat van Android hoort bij een andere redirect-URL,
+    // waardoor Spotify het inloggen weigert ("redirect_uri: Not matching configuration").
+    session_config.client_id = "65b708073fc0480ea92a077233ca87bd".into();
     let credentials = match cache.credentials() {
         Some(c) if !browser => c,
         _ => {
@@ -348,7 +359,7 @@ fn lose(st: &mut State) {
     }
 }
 
-const DONE_PAGE: &str = "Ingelogd! Je kunt dit tabblad sluiten en teruggaan naar Spotimfy.";
+const DONE_PAGE: &str = "Ingelogd! Je kunt dit tabblad sluiten en teruggaan naar Spokoe.";
 
 async fn handle(st: &mut State, cmd: Cmd) {
     match cmd {

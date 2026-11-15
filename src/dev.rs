@@ -1,4 +1,4 @@
-//! Alleen om te testen (SPOTIMFY_DEV=1): op 127.0.0.1:7357 voert POST /js de body uit als
+//! Alleen om te testen (SPOKOE_DEV=1): op 127.0.0.1:7357 voert POST /js de body uit als
 //! async JavaScript in de pagina (met `return` voor een antwoord), en GET /shot?pad maakt een plaatje.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -13,7 +13,7 @@ use objc2_foundation::{NSError, NSString};
 use objc2_web_kit::WKContentWorld;
 
 pub fn start() {
-    if std::env::var("SPOTIMFY_DEV").is_err() {
+    if std::env::var("SPOKOE_DEV").is_err() {
         return;
     }
     std::thread::spawn(|| {

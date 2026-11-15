@@ -34,27 +34,27 @@ jobs:
           cargo install cargo-ndk --locked
 
       - name: Ondertekeningssleutel klaarzetten
-        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/spotimfy-release.jks"
+        run: echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/spokoe-release.jks"
         env:
-          KEYSTORE_BASE64: ${{ secrets.SPOTIMFY_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ secrets.SPOKOE_KEYSTORE_BASE64 }}
 
       - name: APK bouwen
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
           ./android/build.sh
         env:
-          SPOTIMFY_KEYSTORE: ${{ runner.temp }}/spotimfy-release.jks
-          SPOTIMFY_KEYSTORE_PASSWORD: ${{ secrets.SPOTIMFY_KEYSTORE_PASSWORD }}
-          SPOTIMFY_KEY_ALIAS: ${{ secrets.SPOTIMFY_KEY_ALIAS }}
-          SPOTIMFY_KEY_PASSWORD: ${{ secrets.SPOTIMFY_KEY_PASSWORD }}
+          SPOKOE_KEYSTORE: ${{ runner.temp }}/spokoe-release.jks
+          SPOKOE_KEYSTORE_PASSWORD: ${{ secrets.SPOKOE_KEYSTORE_PASSWORD }}
+          SPOKOE_KEY_ALIAS: ${{ secrets.SPOKOE_KEY_ALIAS }}
+          SPOKOE_KEY_PASSWORD: ${{ secrets.SPOKOE_KEY_PASSWORD }}
 
       - name: Release publiceren
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk Spotimfy.apk
+          cp android/app/build/outputs/apk/release/app-release.apk Spokoe.apk
           printf '%s\n' "${COMMIT_MSG:-Handmatig gebouwd}" > notes.md
-          gh release create "android-v1.0.${{ github.run_number }}" Spotimfy.apk \
-            --title "Spotimfy voor Android 1.0.${{ github.run_number }}" \
+          gh release create "android-v1.0.${{ github.run_number }}" Spokoe.apk \
+            --title "Spokoe voor Android 1.0.${{ github.run_number }}" \
             --notes-file notes.md --latest=false

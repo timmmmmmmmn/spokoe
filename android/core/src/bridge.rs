@@ -66,14 +66,14 @@ pub fn handle(text: &str) {
             let id = msg["id"].clone();
             let url = msg["url"].as_str().unwrap_or("").to_string();
             std::thread::spawn(move || {
-                let got = reqwest::blocking::Client::new().get(&url).header("User-Agent", "Mozilla/5.0 Spotimfy").send().and_then(|r| r.text());
+                let got = reqwest::blocking::Client::new().get(&url).header("User-Agent", "Mozilla/5.0 Spokoe").send().and_then(|r| r.text());
                 send(match got {
                     Ok(text) => json!({ "type": "fetchText", "id": id, "text": text }),
                     Err(e) => json!({ "type": "fetchText", "id": id, "error": e.to_string() }),
                 });
             });
         }
-        "checkUpdate" => send(json!({ "type": "update", "id": msg["id"], "data": { "current": env!("CARGO_PKG_VERSION"), "error": "op Android werkt Spotimfy zichzelf bij via de app" } })),
+        "checkUpdate" => send(json!({ "type": "update", "id": msg["id"], "data": { "current": env!("CARGO_PKG_VERSION"), "error": "op Android werkt Spokoe zichzelf bij via de app" } })),
         "log" => log::warn!("pagina: {}", msg["msg"].as_str().unwrap_or("")),
         _ => {}
     }

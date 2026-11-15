@@ -9,7 +9,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 use sha2::Digest;
 
-const DONE: &str = "<!doctype html><meta name=viewport content='width=device-width'><body style='font:18px -apple-system,sans-serif;background:#0a0f3f;color:#f3f5ff;display:grid;place-items:center;height:90vh;text-align:center'><div><h2>Ingelogd!</h2><p>Ga terug naar Spotimfy.</p></div>";
+const DONE: &str = "<!doctype html><meta name=viewport content='width=device-width'><body style='font:18px -apple-system,sans-serif;background:#0a0f3f;color:#f3f5ff;display:grid;place-items:center;height:90vh;text-align:center'><div><h2>Ingelogd!</h2><p>Ga terug naar Spokoe.</p></div>";
 
 fn token_request(form: &[(&str, &str)]) -> Result<(String, String, u64), String> {
     let r: Value = reqwest::blocking::Client::new()

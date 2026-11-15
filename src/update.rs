@@ -4,7 +4,7 @@
 use serde_json::{json, Value};
 
 /// Mac- en Android-versies staan in dezelfde repo; de Mac neemt de nieuwste release met een .zip.
-const RELEASES: &str = "https://api.github.com/repos/timmmmmmmmn/spotimfy/releases?per_page=30";
+const RELEASES: &str = "https://api.github.com/repos/timmmmmmmmn/spokoe/releases?per_page=30";
 
 fn version_tuple(v: &str) -> Vec<u32> {
     v.trim_start_matches('v').split('.').map(|p| p.parse().unwrap_or(0)).collect()
@@ -15,7 +15,7 @@ pub fn check() -> Value {
     let current = env!("CARGO_PKG_VERSION");
     let got = reqwest::blocking::Client::new()
         .get(RELEASES)
-        .header("User-Agent", "Spotimfy")
+        .header("User-Agent", "Spokoe")
         .header("Accept", "application/vnd.github+json")
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -41,13 +41,13 @@ pub fn check() -> Value {
 }
 
 pub fn install(url: &str) -> Result<(), String> {
-    let dir = std::env::temp_dir().join("spotimfy-update");
+    let dir = std::env::temp_dir().join("spokoe-update");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let zip = dir.join("Spotimfy.zip");
+    let zip = dir.join("Spokoe.zip");
     let bytes = reqwest::blocking::Client::new()
         .get(url)
-        .header("User-Agent", "Spotimfy")
+        .header("User-Agent", "Spokoe")
         .timeout(std::time::Duration::from_secs(300))
         .send()
         .and_then(|r| r.error_for_status())
@@ -55,19 +55,19 @@ pub fn install(url: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     std::fs::write(&zip, &bytes).map_err(|e| e.to_string())?;
     let ok = std::process::Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&zip).arg(&dir).status().map_err(|e| e.to_string())?;
-    if !ok.success() || !dir.join("Spotimfy.app").exists() {
+    if !ok.success() || !dir.join("Spokoe.app").exists() {
         return Err("de download is geen geldige app".into());
     }
     // Een klein script wacht tot deze app dicht is, zet de nieuwe neer en opent hem.
     let target = std::env::current_exe()
         .ok()
         .and_then(|p| p.ancestors().find(|a| a.extension().is_some_and(|e| e == "app")).map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| "/Applications/Spotimfy.app".into());
+        .unwrap_or_else(|| "/Applications/Spokoe.app".into());
     let script = format!(
         "while kill -0 {pid} 2>/dev/null; do sleep 0.3; done; rm -rf '{t}'; mv '{n}' '{t}'; xattr -dr com.apple.quarantine '{t}' 2>/dev/null; open '{t}'",
         pid = std::process::id(),
         t = target.display(),
-        n = dir.join("Spotimfy.app").display()
+        n = dir.join("Spokoe.app").display()
     );
     std::process::Command::new("/bin/sh").args(["-c", &script]).spawn().map_err(|e| e.to_string())?;
     dispatch2::DispatchQueue::main().exec_async(|| {
