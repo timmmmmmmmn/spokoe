@@ -84,3 +84,24 @@ pub async fn artist_top(session: &Session, id: &str) -> Result<Value, String> {
     let top = a.top_tracks.for_country(&session.country());
     Ok(json!(tracks(session, top.0.into_iter().take(10).collect()).await))
 }
+
+/// Kandidaten voor de radio: Spotify's eigen radio (apollo) voor een nummer of artiest,
+/// zonder `previous` (al gehoord). Geeft de nummers met gegevens terug, in Spotify's volgorde.
+pub async fn radio(session: &Session, seed: &str, count: usize, previous: Vec<String>) -> Result<Value, String> {
+    let previous: Vec<SpotifyId> = previous.iter().filter_map(|u| SpotifyId::from_base62(u.rsplit(':').next()?).ok()).take(100).collect();
+    let station = if seed.starts_with("spotify:station:") { seed.to_string() } else { format!("spotify:station:{}", seed.trim_start_matches("spotify:")) };
+    let raw = session
+        .spclient()
+        .get_apollo_station("stations", &station, Some(count), previous, false)
+        .await
+        .map_err(|e| e.to_string())?;
+    let v: Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+    let uris: Vec<SpotifyUri> = v["tracks"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|t| t["uri"].as_str().and_then(|u| SpotifyUri::from_uri(u).ok())).collect())
+        .unwrap_or_default();
+    if uris.is_empty() {
+        return Err(format!("geen radio: {}", v.to_string().chars().take(200).collect::<String>()));
+    }
+    Ok(json!(tracks(session, uris).await))
+}

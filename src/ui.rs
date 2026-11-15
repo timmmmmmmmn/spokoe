@@ -307,6 +307,15 @@ define_class!(
             });
         }
 
+        /// Menubalk-icoon: eiland aan/uit.
+        #[unsafe(method(toggleIsland:))]
+        fn toggle_island(&self, sender: &NSMenuItem) {
+            let on = !crate::settings::get("island").as_bool().unwrap_or(true);
+            crate::settings::set("island", json!(on));
+            sender.setState(if on { objc2_app_kit::NSControlStateValueOn } else { objc2_app_kit::NSControlStateValueOff });
+            send(json!({ "type": "island", "on": on }));
+        }
+
         #[unsafe(method(showWindow:))]
         fn show_window_action(&self, _sender: Option<&AnyObject>) {
             show_window();
@@ -554,6 +563,11 @@ fn status_bar(mtm: MainThreadMarker, host: &Host) -> (Retained<NSStatusItem>, Re
     menu.addItem(&item(mtm, host, "Vorige", "prev", "", none));
     menu.addItem(&item(mtm, host, "Vind ik leuk", "like", "", none));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let island = plain(mtm, "Eiland bij nieuw nummer", Some(sel!(toggleIsland:)), "");
+    unsafe { island.setTarget(Some(host)) };
+    let on = crate::settings::get("island").as_bool().unwrap_or(true);
+    island.setState(if on { objc2_app_kit::NSControlStateValueOn } else { objc2_app_kit::NSControlStateValueOff });
+    menu.addItem(&island);
     let show = plain(mtm, "Open Spotimfy", Some(sel!(showWindow:)), "");
     unsafe { show.setTarget(Some(host)) };
     menu.addItem(&show);

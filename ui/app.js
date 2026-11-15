@@ -71,6 +71,7 @@ window.spotimfy = {
       case 'unavailable': return toast('Dit nummer is hier niet beschikbaar');
       case 'remote': return onRemote(m.cmd, m.ms);
       case 'reconnected': return onReconnected();
+      case 'island': store.set('island', m.on); return;
       case 'fullscreen': return;
     }
   },
@@ -327,6 +328,7 @@ function onTrack(t, local) {
     S.pos = 0; S.at = Date.now();
     if (local && S.stopAfter) { S.stopAfter = false; post('pause'); post('seek', { ms: 0 }); toast('Gestopt na het vorige nummer'); }
     if (local) remember(t);
+    if (local && S.mix) setTimeout(mixRefill, 1500);
     checkLiked([t]);
     lyricsFor(t);
     if (S.panel === 'queue') renderQueue();
@@ -680,6 +682,9 @@ function trackList(el, tracks, { ctx, album = true, numbers = false, cover = tru
 function playFromList(L, i) {
   const t = L.shown[i];
   if (!t || t.playable === false) return;
+  S.mix = null;
+  // Een los nummer uit een zoeklijst: dat nummer, dan een mix die erbij past.
+  if (!L.ctx?.uri && L.mix) return playMix(t);
   if (L.ctx?.uri) {
     S.ctx = L.ctx.uri;
     // Op plek in de lijst: de ID die Spotify hier gebruikt kan een andere versie van het nummer zijn.
@@ -733,10 +738,22 @@ document.addEventListener('click', e => {
 
 /** Een album, playlist of artiest afspelen (of een los nummer). */
 function playUri(uri, track) {
+  S.mix = null;
+  if ((uri.startsWith('spotify:track:') || uri.startsWith('spotify:episode:')) && !track) {
+    const t = findTrack(uri);
+    if (t && uri.startsWith('spotify:track:')) return playMix(t);
+    if (uri.startsWith('spotify:track:')) return soft(get(`/tracks/${idOf(uri)}`, 3600000)).then(full => full ? playMix(norm(full)) : play({ tracks: [uri] }));
+  }
   if (S.ctx === uri && S.track && S.local && !track) return ctl('toggle');
   if (uri.startsWith('spotify:track:') || uri.startsWith('spotify:episode:')) { S.ctx = null; return play({ tracks: [uri] }); }
   S.ctx = uri;
   play({ context: uri, ...(track ? { uri: track } : {}) });
+}
+
+function findTrack(uri) {
+  for (const L of lists.values()) { const t = L.tracks.find(x => x.uri === uri); if (t) return t; }
+  const h = store.get('hist', []).find(x => x.uri === uri);
+  return h ? { uri, name: h.name, artists: h.artists.map(name => ({ name })), album: { name: '', images: [{ url: h.cover }] } } : null;
 }
 
 function updateBigPlay(b) {
@@ -796,9 +813,8 @@ async function queueTrack(t) {
   catch (e) { toast(e.status === 404 ? 'Speel eerst iets af' : e.message); }
 }
 function radio(t) {
-  S.ctx = null;
-  play({ context: 'spotify:station:track:' + idOf(t.uri) });
-  toast('Radio gestart');
+  toast('Radio wordt gemaakt…');
+  playMix(t, { label: `Radio: ${t.name}` });
 }
 function copyLink(uri) {
   const [, kind, id] = uri.split(':');
@@ -1043,10 +1059,10 @@ const views = {
           ${artists.length ? `<h2>Artiesten</h2><div class="row-scroll">${artists.map(artistCard).join('')}</div>` : ''}
           ${albums.length ? `<h2>Albums</h2><div class="row-scroll">${albums.map(albumCard).join('')}</div>` : ''}
           ${pls.length ? `<h2>Playlists</h2><div class="row-scroll">${pls.map(playlistCard).join('')}</div>` : ''}`;
-        trackList($('#s-tracks', out), tracks.slice(0, 5), { album: false });
+        trackList($('#s-tracks', out), tracks.slice(0, 5), { album: false }).mix = true;
       } else if (type === 'track') {
         out.innerHTML = '<div id="s-tracks"></div>';
-        trackList($('#s-tracks', out), tracks);
+        trackList($('#s-tracks', out), tracks).mix = true;
       } else {
         const list = type === 'artist' ? artists.map(artistCard) : type === 'album' ? albums.map(albumCard) : pls.map(playlistCard);
         out.innerHTML = `<div class="grid">${list.join('') || '<div class="empty">Niets gevonden</div>'}</div>`;
@@ -1148,7 +1164,7 @@ const views = {
       <section id="a-top"></section><section id="a-albums"></section><section id="a-singles"></section>`;
     tint(el, a.images);
     updateBigPlay($('.big-play', el));
-    $('#a-radio', el).onclick = () => { S.ctx = null; play({ context: 'spotify:station:artist:' + a.id }); toast('Radio gestart'); };
+    $('#a-radio', el).onclick = () => { toast('Radio wordt gemaakt…'); playMix({ uri: a.uri, name: a.name, artists: [{ name: a.name, id: a.id }] }); };
     const fb = $('#a-follow', el);
     soft(api(`/me/library/contains?uris=${a.uri}`)).then(r => { if (Array.isArray(r)) { fb.classList.toggle('on', r[0]); fb.textContent = r[0] ? 'Volgend' : 'Volgen'; } });
     fb.onclick = async () => {
@@ -1284,6 +1300,109 @@ function tint(el, images) {
     } catch {}
   };
   im.src = u;
+}
+
+// ——— Mix: wat er speelt als je geen playlist luistert ———
+// Kandidaten uit Spotify's eigen radio (op het nummer én de artiest), daarna gefilterd en
+// gerangschikt op jouw smaak: niets wat je net hoorde, geen dubbele versies, artiesten
+// verspreid, en een balans tussen ontdekken en vertrouwd (Instellingen).
+const songKey = t => (t.name.toLowerCase().replace(/\s*[-(\[].*$/, '') + '|' + (t.artists[0]?.name || '').toLowerCase());
+const noShuffle = () => new Set(store.get('noShuffle', []));
+
+/** Jouw smaak: top-artiesten en artiesten uit je liked songs (een dag onthouden). */
+async function taste() {
+  const t = store.get('taste', null);
+  if (t && Date.now() - t.at < 864e5) return { top: new Set(t.top), liked: new Map(t.liked) };
+  const [a, b, l] = await Promise.all([
+    soft(get('/me/top/artists?time_range=short_term&limit=10', 864e5)),
+    soft(get('/me/top/artists?time_range=medium_term&limit=10', 864e5)),
+    soft(pages('/me/tracks?limit=50', null, 400)),
+  ]);
+  const top = [...(a?.items || []), ...(b?.items || [])].map(x => x.name.toLowerCase());
+  const liked = new Map();
+  for (const x of l || []) for (const ar of x.track?.artists || []) liked.set(ar.name.toLowerCase(), (liked.get(ar.name.toLowerCase()) || 0) + 1);
+  store.set('taste', { at: Date.now(), top, liked: [...liked] });
+  return { top: new Set(top), liked };
+}
+
+const radioCore = (seed, count, previous) => rpc('meta', { kind: 'radio', arg: JSON.stringify({ seed, count, previous }) }).then(r => r.data, () => []);
+
+/** Een rij nummers die past bij `seeds` (nummers of artiesten), zonder wat in `skip` staat. */
+async function mixFor(seeds, { count = 40, skip = [] } = {}) {
+  const hist = store.get('hist', []);
+  const recent = new Set(hist.filter(h => Date.now() - h.t < 3 * 864e5).map(h => songKey({ name: h.name, artists: [{ name: h.artists[0] }] })));
+  const previous = hist.slice(0, 80).map(h => h.uri);
+  const lists = await Promise.all([
+    ...seeds.filter(x => x.uri.startsWith('spotify:track:')).slice(0, 3).map(t => radioCore(t.uri, 50, previous)),
+    ...[...new Set(seeds.map(x => x.artists?.[0]?.id ? 'spotify:artist:' + x.artists[0].id : x.uri.startsWith('spotify:artist:') ? x.uri : null).filter(Boolean))].slice(0, 2).map(u => radioCore(u, 25, previous)),
+  ]);
+  const me = await taste();
+  const balance = store.get('mixBalance', 0.5); // 0 = vertrouwd, 1 = ontdekken
+  const banned = noShuffle();
+  const seen = new Set([...skip.map(songKey), ...seeds.filter(x => x.name).map(songKey)]);
+  const cand = new Map();
+  lists.forEach((list, li) => list.forEach((t, rank) => {
+    const k = songKey(t);
+    if (seen.has(k) || banned.has(t.uri)) return;
+    const c = cand.get(k) || { t, rank, hits: 0 };
+    c.rank = Math.min(c.rank, rank + li * 2);
+    c.hits++;
+    cand.set(k, c);
+  }));
+  const scored = [...cand.values()].map(c => {
+    const ar = (c.t.artists[0]?.name || '').toLowerCase();
+    const known = recent.has(songKey(c.t));
+    let score = 100 - c.rank * 1.6 + (c.hits - 1) * 14;
+    if (me.top.has(ar)) score += 10 * (1 - balance) + 4;
+    if (me.liked.has(ar)) score += Math.min(12, me.liked.get(ar) * 2) * (1 - balance);
+    if (!me.liked.has(ar) && !me.top.has(ar)) score += 14 * balance;
+    if (known) score -= 60;
+    // Live- en remaster-versies alleen als je zelf ook zoiets startte.
+    if (/\blive\b/i.test(c.t.name) && !seeds.some(x => /\blive\b/i.test(x.name || ''))) score -= 18;
+    return { ...c, score };
+  }).sort((a, b) => b.score - a.score);
+  // Artiesten verspreiden: niet twee keer dezelfde binnen 4 nummers.
+  const out = [];
+  const pool = scored.map(x => x.t);
+  while (out.length < count && pool.length) {
+    const recentArtists = out.slice(-4).map(t => t.artists[0]?.name);
+    let i = pool.findIndex(t => !recentArtists.includes(t.artists[0]?.name));
+    if (i < 0) i = 0;
+    out.push(pool.splice(i, 1)[0]);
+  }
+  return out;
+}
+
+/** Een los nummer (of artiest) starten en daarna doorspelen met een passende mix. */
+async function playMix(seed, { label } = {}) {
+  S.ctx = null;
+  const isArtist = seed.uri.startsWith('spotify:artist:');
+  const timeout = new Promise(r => setTimeout(() => r(null), isArtist ? 4000 : 900));
+  const first = mixFor([seed], { count: 40 });
+  const mix = await Promise.race([first, timeout]);
+  const list = isArtist ? mix || await first : [seed, ...(mix || [])];
+  S.mix = { list: list.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })), label: label || (isArtist ? `Radio: ${seed.name}` : `Mix: ${seed.name}`), refilling: false };
+  play({ tracks: list.map(t => t.uri) });
+  if (!mix && !isArtist) first.then(more => { S.mix.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists }))); queueUris(more.slice(0, 15).map(t => t.uri)); });
+}
+
+/** Bijna aan het eind van de mix: aanvullen op basis van wat je net hoorde. */
+async function mixRefill() {
+  const m = S.mix;
+  if (!m || m.refilling || !S.track) return;
+  const at = m.list.findIndex(t => sameSong(t, S.track));
+  if (at < 0 || m.list.length - at > 4) return;
+  m.refilling = true;
+  const seeds = m.list.slice(Math.max(0, at - 2), at + 1);
+  const more = await mixFor(seeds, { count: 20, skip: m.list });
+  m.list.push(...more.map(t => ({ uri: t.uri, name: t.name, artists: t.artists })));
+  await queueUris(more.map(t => t.uri));
+  m.refilling = false;
+}
+
+/** Nummers achter de huidige zetten (via de wachtrij van Spotify). */
+async function queueUris(uris) {
+  for (const u of uris) await soft(api('/me/player/queue?uri=' + encodeURIComponent(u), { method: 'POST' }));
 }
 
 /** Slim shuffelen: echt willekeurig, recent gehoorde nummers achteraan, niet twee keer dezelfde artiest na elkaar. */
@@ -1522,6 +1641,7 @@ const commands = () => [
   ['Thema: licht', 'light licht thema', () => { store.set('theme', 'light'); applyTheme(); }],
   ['Thema: systeem', 'system systeem thema', () => { store.set('theme', 'system'); applyTheme(); }],
   ['Nieuwe playlist', 'playlist maken nieuw', () => newPlaylist()],
+  [store.get('island', true) ? 'Eiland uitzetten' : 'Eiland aanzetten', 'eiland dynamic island melding pil', () => setIsland(!store.get('island', true))],
   ...(S.track ? [['Radio op basis van dit nummer', 'radio', () => radio(S.track)]] : []),
 ];
 async function palRun() {
@@ -1578,7 +1698,7 @@ function palPick(mode) {
   if (x.page) return go(x.go);
   if (mode === 'open' && x.go) return go(x.go);
   if (mode === 'queue' && x.track) return queueTrack(x.raw || { uri: x.uri, name: x.t });
-  if (x.track) { S.ctx = null; return play({ tracks: [x.uri] }); }
+  if (x.track) return playMix(x.raw || { uri: x.uri, name: x.t, artists: [{ name: x.s.split(', ')[0] }] });
   playUri(x.uri);
 }
 $('#pal-input').addEventListener('input', palRun);
@@ -1622,6 +1742,12 @@ document.addEventListener('keydown', e => {
 });
 
 // ——— thema ———
+function setIsland(on) {
+  store.set('island', on);
+  post('island', { on });
+  toast(on ? 'Eiland staat aan' : 'Eiland staat uit');
+}
+
 function applyTheme() {
   const t = store.get('theme', 'system');
   if (t === 'system') document.documentElement.removeAttribute('data-theme');
