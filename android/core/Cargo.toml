@@ -26,3 +26,7 @@ tokio = { version = "1", features = ["full"] }
 lto = true
 strip = true
 opt-level = 3
+
+# Aangepaste librespot-core: op Android als Linux (zie vendor/librespot-core/src/config.rs).
+[patch.crates-io]
+librespot-core = { path = "vendor/librespot-core" }
