@@ -661,7 +661,6 @@ html.mobile .row-set { grid-template-columns: 1fr auto; }
 html.mobile .row-set input[type=range] { grid-column: 1 / -1; }
 html.mobile .row-set select { max-width: 60vw; }
 html.mobile .eq-bands { height: 170px; }
-html.mobile .settings .box:has(#set-cid) { display: none; }
 
 /* menu's als vel van onderen */
 html.mobile #menu { left: 8px !important; right: 8px; top: auto !important; bottom: calc(var(--safe-bottom) + 8px); max-height: 70vh; overflow-y: auto; border-radius: 18px; padding: 8px; }
@@ -797,3 +796,119 @@ html.mobile.tablet #lyrics-full.no-lyrics .lf-side { left: 50%; transform: trans
 /* Telefoon: de achtergrond van Nu speelt is al wazig gemaakt (zie blurredCover). */
 html.mobile .lf-bg { filter: none; inset: 0; transform: none; }
 .lf-bg img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* ═══════════ Beweging ═══════════ */
+:root { --spring: cubic-bezier(.2, .9, .25, 1.05); --ease: cubic-bezier(.2, .8, .2, 1); }
+
+/* Pagina's schuiven zacht in; kaarten en tegels kort na elkaar. */
+#view > div { animation: view-in .34s var(--ease) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+:is(.row-scroll, .grid, .quick, .rank) > * { animation: card-in .45s var(--ease) both; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(2) { animation-delay: .03s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(3) { animation-delay: .06s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(4) { animation-delay: .09s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(5) { animation-delay: .12s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(6) { animation-delay: .15s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(7) { animation-delay: .18s; }
+:is(.row-scroll, .grid, .quick, .rank) > :nth-child(n+8) { animation-delay: .21s; }
+@keyframes card-in { from { opacity: 0; transform: translateY(16px) scale(.97); } to { opacity: 1; transform: none; } }
+.hero { animation: hero-in .5s var(--ease) both; }
+@keyframes hero-in { from { opacity: 0; } to { opacity: 1; } }
+.hero > img, .hero > .ph, .hero > .sleeve, .hero > .made-cover { animation: cover-in .55s var(--spring) .05s both; }
+@keyframes cover-in { from { opacity: 0; transform: translateY(18px) scale(.92); } to { opacity: 1; transform: none; } }
+
+/* Indrukken: alles veert een beetje mee. */
+:is(.card, .tile, .tr:not(.head), .pill, .big-play, #b-play, .mnav-pill button, .mnav-add, .icon, .q, .pi, .primary, .ghost, #lf-play, .chips button) { transition: transform .18s var(--ease), background .2s, opacity .2s, color .2s; }
+:is(.card, .tile, .tr:not(.head), .q, .pi):active { transform: scale(.975); }
+:is(.pill, .big-play, #b-play, .mnav-add, .icon, .primary, .ghost, #lf-play, .chips button, .mnav-pill button):active { transform: scale(.92); }
+.mnav-pill button.on { animation: tab-on .35s var(--spring); }
+@keyframes tab-on { from { transform: scale(.85); } to { transform: none; } }
+
+/* Hartje: kort opveren. */
+.pop svg { animation: pop .45s var(--spring); }
+@keyframes pop { 0% { transform: scale(1); } 35% { transform: scale(1.35); } 100% { transform: scale(1); } }
+
+/* Nieuw nummer: titel en hoes glijden om. */
+.swap { animation: swap .42s var(--ease); }
+@keyframes swap { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+#np-cover.swap, .lf-side.swap .lf-cover { animation: swap-cover .5s var(--spring); }
+@keyframes swap-cover { from { opacity: .3; transform: scale(.9); } to { opacity: 1; transform: none; } }
+
+/* Nu speelt: als vel omhoog, en weer omlaag bij sluiten. */
+#lyrics-full:not([hidden]) { animation: sheet-up .42s var(--spring) both; }
+#lyrics-full.closing { animation: sheet-down .26s var(--ease) both; }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes sheet-down { from { transform: none; } to { transform: translateY(100%); } }
+#lyrics-full:not([hidden]) .lf-cover { animation: cover-in .6s var(--spring) .12s both; }
+html:not(.mobile) #lyrics-full:not([hidden]) { animation: fade-in .3s var(--ease) both; }
+html:not(.mobile) #lyrics-full.closing { animation: fade-out .22s var(--ease) both; }
+@keyframes fade-in { from { opacity: 0; transform: scale(1.02); } to { opacity: 1; transform: none; } }
+@keyframes fade-out { from { opacity: 1; } to { opacity: 0; transform: scale(1.02); } }
+.lf-lines p { transition: color .35s, transform .35s var(--ease), opacity .35s; }
+.lf-lines p.cur { transform: scale(1.02); }
+
+/* Menu's, meldingen, panelen en vensters. */
+#menu.in { animation: menu-in .2s var(--spring) both; transform-origin: top left; }
+@keyframes menu-in { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+html.mobile #menu.in { animation: sheet-up .32s var(--spring) both; }
+#toast.in { animation: toast-in .35s var(--spring) both; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 16px) scale(.96); } to { opacity: 1; transform: translateX(-50%); } }
+#panel:not([hidden]) { animation: panel-in .34s var(--ease) both; }
+@keyframes panel-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+html.mobile:not(.tablet) #panel:not([hidden]) { animation: sheet-up .4s var(--spring) both; }
+.ask-box, .pal-box { animation: menu-in .24s var(--spring) both; transform-origin: center top; }
+#ask, #palette { animation: hero-in .2s both; }
+.tr.now .t { transition: color .3s; }
+
+/* Laden: een rustige glans in plaats van tekst. */
+.skel-row { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 10px; }
+.skel-row > i { width: 44px; height: 44px; border-radius: 8px; flex: none; }
+.skel-row > div { flex: 1; display: grid; gap: 7px; }
+.skel-row b { display: block; height: 11px; border-radius: 6px; width: 46%; }
+.skel-row b.short { width: 28%; opacity: .7; }
+
+/* ═══════════ Telefoon: rustiger en mooier ═══════════ */
+html.mobile #view { padding-left: 18px; padding-right: 18px; }
+html.mobile h1.page { font-size: 34px; letter-spacing: -.03em; margin: 4px 0 18px; }
+html.mobile h2 { font-size: 21px; letter-spacing: -.02em; margin: 30px 0 12px; }
+html.mobile .tile { height: 58px; border-radius: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+html.mobile .tile img, html.mobile .tile .ph { width: 58px; height: 58px; }
+html.mobile .tile span { font-size: 13.5px; font-weight: 700; }
+html.mobile .card { padding: 4px; }
+html.mobile .card .cover { border-radius: 14px; box-shadow: 0 12px 28px rgba(0,0,0,.35); }
+html.mobile .card .t { font-size: 14px; margin-top: 10px; }
+html.mobile .row-scroll { grid-auto-columns: 148px; gap: 10px; }
+html.mobile .tr .main img { width: 48px; height: 48px; border-radius: 9px; }
+html.mobile .tr .t { font-size: 15.5px; font-weight: 600; }
+html.mobile .tr .a { font-size: 13px; }
+html.mobile .tr { height: 62px; }
+html.mobile .pill { padding: 9px 14px; font-size: 13.5px; }
+/* Kop van album/playlist: gecentreerd, grote hoes, met parallax bij scrollen. */
+html.mobile:not(.tablet) .hero { align-items: center; text-align: center; padding-bottom: 8px; }
+html.mobile:not(.tablet) .hero > div { width: 100%; }
+html.mobile:not(.tablet) .hero img, html.mobile:not(.tablet) .hero .ph, html.mobile:not(.tablet) .made-cover.big { width: 230px; height: 230px; border-radius: 16px; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  transform: translateY(calc(var(--scroll, 0) * .35px)) scale(calc(1 - var(--scroll, 0) / 1400)); opacity: calc(1 - var(--scroll, 0) / 420); }
+html.mobile:not(.tablet) .sleeve { align-self: center; transform: scale(.85); margin: 0 auto -30px; left: -46px; }
+html.mobile:not(.tablet) .hero h1 { font-size: 32px; margin: 2px 0 6px; }
+html.mobile:not(.tablet) .hero .desc { margin: 0 auto 8px; }
+html.mobile:not(.tablet) .actions:not([style]) { justify-content: center; }
+html.mobile:not(.tablet) .actions .filter { order: 9; }
+html.mobile .big-play { width: 58px; height: 58px; }
+/* Minispeler: iets voller en ronder. */
+html.mobile #bar { height: 66px; border-radius: 20px; padding: 0 8px 0 9px; }
+html.mobile #np-cover { width: 48px; height: 48px; border-radius: 11px; box-shadow: 0 6px 16px rgba(0,0,0,.3); }
+html.mobile #np-title { font-size: 15px; }
+/* Navigatie: zachtere pil. */
+html.mobile .mnav-pill { border-radius: 26px; padding: 6px; }
+html.mobile .mnav-pill button { border-radius: 20px; transition: background .3s var(--ease), color .3s; }
+html.mobile .mnav-add { border-radius: 22px; }
+/* Nu speelt op de telefoon: grotere hoes, grotere knoppen. */
+html.mobile:not(.tablet) .lf-cover { border-radius: 18px; box-shadow: 0 30px 70px rgba(0,0,0,.55); }
+html.mobile:not(.tablet) .lf-title { font-size: 26px; }
+html.mobile:not(.tablet) #lf-play { width: 70px; height: 70px; }
+html.mobile:not(.tablet) .lf-ctl { gap: 18px; margin-top: 14px; }
+html.mobile .lf-close { width: 40px; height: 40px; background: rgba(255,255,255,.12); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+/* Een handvat bovenaan het vel. */
+html.mobile:not(.tablet) #lyrics-full::before { content: ""; position: absolute; z-index: 3; top: calc(var(--safe-top) + 14px); left: 50%; transform: translateX(-50%); width: 40px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.35); }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; } }

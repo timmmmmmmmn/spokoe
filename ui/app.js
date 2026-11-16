@@ -151,7 +151,12 @@ $('#login-btn').onclick = () => { post('login'); $('#login-btn').disabled = true
 let tok = null, tokExp = 0, tokP = null;
 function token(fresh) {
   if (!fresh && tok && Date.now() < tokExp - 30000) return Promise.resolve(tok);
-  if (!tokP) tokP = rpc('token').then(r => { tok = r.token; tokExp = r.expires; tokP = null; return tok; }, e => { tokP = null; throw e; });
+  if (!tokP) tokP = rpc('token').then(r => { tok = r.token; tokExp = r.expires; tokP = null; return tok; }, e => {
+    tokP = null;
+    // Niet stil falen: laten zien waarom de bibliotheek niet laadt.
+    if (Date.now() - (token.warned || 0) > 60000) { token.warned = Date.now(); toast('Bibliotheek laden lukt niet: ' + e.message + '. Vul eventueel een eigen Client ID in (Instellingen).'); }
+    throw e;
+  });
   return tokP;
 }
 
@@ -174,7 +179,10 @@ async function api(path, { method = 'GET', body, retry = 2, raw, type } = {}) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch {}
-  if (!res.ok) throw new ApiError(res.status, data?.error?.message || data?.error_description || `HTTP ${res.status}`);
+  if (!res.ok) {
+    if ((res.status === 401 || res.status === 403) && Date.now() - (api.warned || 0) > 60000 && /\/me\b/.test(path)) { api.warned = Date.now(); toast(`Spotify weigert de toegang (${res.status}). Probeer een eigen Client ID in Instellingen.`); }
+    throw new ApiError(res.status, data?.error?.message || data?.error_description || `HTTP ${res.status}`);
+  }
   return data;
 }
 
@@ -338,7 +346,7 @@ function onRemote(cmd, ms) {
     sleep: () => sleepMenu($('#b-sleep')),
     mini: () => toggleMini(),
     find: () => { const f = $('#c-filter') || $('#lib-filter') || $('#s-in'); f ? (f.focus(), f.select()) : openPalette(); },
-    nowplaying: () => $('#lyrics-full').hidden ? openLyricsFull() : ($('#lyrics-full').hidden = true),
+    nowplaying: () => $('#lyrics-full').hidden ? openLyricsFull() : closeLyricsFull(),
   };
   acts[cmd]?.();
 }
@@ -402,6 +410,11 @@ function blurredCover(url, done) {
 // ——— spelerbalk ———
 function renderTrack() {
   const t = S.track;
+  if (t && renderTrack.last !== t.uri) {
+    renderTrack.last = t.uri;
+    // Opnieuw starten van de animatie: class weg, reflow, class erbij.
+    for (const el of [$('#np-text'), $('#np-cover'), $('.lf-side')]) { el.classList.remove('swap'); void el.offsetWidth; el.classList.add('swap'); }
+  }
   const small = t ? pic(t.album.images, 128) : '';
   // Geen hoes: geen kapot plaatje, maar een nette vervanger.
   if (small) $('#np-cover').src = small; else $('#np-cover').removeAttribute('src');
@@ -459,6 +472,8 @@ function renderVolume() {
 }
 function renderLike() {
   const on = S.track && S.liked.get(S.track.uri);
+  if (on && renderLike.was === false) for (const b of [$('#np-like'), $('#lf-like')]) { b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
+  renderLike.was = !!on;
   $('#lf-like').classList.toggle('on', !!on);
   $('#lf-like').innerHTML = icon(on ? 'heart-on' : 'heart');
   const b = $('#np-like');
@@ -509,7 +524,7 @@ $('#lf-shuffle').onclick = () => ctl('shuffle', !S.shuffle);
 $('#lf-repeat').onclick = () => ctl('repeat', (S.repeat + 1) % 3);
 $('#lf-like').onclick = () => S.track && toggleLike(S.track);
 $('#lf-lyr').onclick = () => { $('#lyrics-full').classList.toggle('show-lyrics'); if (!lyr && S.track) lyricsFor(S.track); };
-$('#lf-queue').onclick = () => { $('#lyrics-full').hidden = true; togglePanel('queue'); };
+$('#lf-queue').onclick = () => { closeLyricsFull(); togglePanel('queue'); };
 $('#lf-dev').onclick = e => devicesMenu(e.currentTarget);
 $('#lf-sleep').onclick = e => sleepMenu(e.currentTarget);
 // Nu speelt: omlaag vegen om te sluiten.
@@ -524,7 +539,7 @@ $('#lf-sleep').onclick = e => sleepMenu(e.currentTarget);
     y0 = null;
     lf.style.transition = 'transform .25s';
     lf.style.transform = dy > 120 ? 'translateY(100%)' : '';
-    setTimeout(() => { if (dy > 120) lf.hidden = true; lf.style.transform = ''; lf.style.transition = ''; }, 250);
+    setTimeout(() => { if (dy > 120) { lf.hidden = true; glisseSync(); } lf.style.transform = ''; lf.style.transition = ''; }, 250);
   });
 })();
 $('#b-mini').onclick = () => toggleMini();
@@ -726,6 +741,9 @@ async function show(entry) {
 
 $('#view').addEventListener('scroll', () => {
   $('#top').classList.toggle('solid', $('#view').scrollTop > 140);
+  // De hoes in de kop schuift en vervaagt een beetje mee (parallax).
+  const hero = $('#view .hero');
+  if (hero) { const y = Math.min(260, $('#view').scrollTop); hero.style.setProperty('--scroll', y); }
   const more = $('#view .more-rows');
   if (more && $('#view').scrollTop + $('#view').clientHeight > $('#view').scrollHeight - 900) more.click();
 }, { passive: true });
@@ -1314,6 +1332,7 @@ function menu(x, y, items) {
     m.append(b);
   }
   m.hidden = false;
+  m.classList.remove('in'); void m.offsetWidth; m.classList.add('in');
   const r = m.getBoundingClientRect();
   m.style.left = Math.min(x, innerWidth - r.width - 8) + 'px';
   m.style.top = Math.min(y, innerHeight - r.height - 8) + 'px';
@@ -1330,6 +1349,7 @@ function toast(text) {
   const t = $('#toast');
   t.textContent = text;
   t.hidden = false;
+  t.classList.remove('in'); void t.offsetWidth; t.classList.add('in');
   clearTimeout(toast.t);
   toast.t = setTimeout(() => t.hidden = true, 2600);
 }
@@ -2033,7 +2053,7 @@ async function collection(el, o, alive) {
     <button class="pill" id="c-smart" title="Shuffle die echt husselt, en wat je net hoorde naar achteren schuift">${icon('shuffle')} Slim shuffelen</button>
     ${o.follow ? `<button class="pill" id="c-follow">Volgen</button>` : ''}${o.save ? `<button class="pill" id="c-save">Bewaren</button>` : ''}
     ${o.more ? `<button class="icon" id="c-more" title="Meer">${icon('more')}</button>` : ''}
-    <input class="filter" id="c-filter" placeholder="Zoek in de lijst…"></div><div id="c-list"><div class="loading-more">Laden…</div></div>`;
+    <input class="filter" id="c-filter" placeholder="Zoek in de lijst…"></div><div id="c-list">${Array.from({ length: 8 }, () => '<div class="skel-row"><i class="skel"></i><div><b class="skel"></b><b class="skel short"></b></div></div>').join('')}</div>`;
   tint(el, o.images);
   // Volgen (playlist van een ander) of bewaren (album): via je bibliotheek.
   for (const [id, uri, on, off] of [['#c-follow', o.follow, 'Gevolgd', 'Volgen'], ['#c-save', o.save, 'Bewaard', 'Bewaren']]) {
@@ -2440,8 +2460,17 @@ function renderLyricsPanel() {
   if (!lyr && S.track) lyricsFor(S.track);
   lastLine = -2;
 }
+/** Nu speelt dichtschuiven (eerst de animatie, dan pas weg). */
+function closeLyricsFull() {
+  const lf = $('#lyrics-full');
+  if (lf.hidden || lf.classList.contains('closing')) return;
+  lf.classList.add('closing');
+  setTimeout(() => { lf.hidden = true; lf.classList.remove('closing'); glisseSync(); }, 260);
+}
+
 function openLyricsFull() {
   if (!S.track) return;
+  $('#lyrics-full').classList.remove('closing');
   $('#lyrics-full').hidden = false;
   glisseSync();
   renderLyricsFull();
@@ -2455,7 +2484,7 @@ function renderLyricsFull() {
   renderTrack();
   lastLine = -2;
 }
-$('#lyrics-full .lf-close').onclick = () => { $('#lyrics-full').hidden = true; glisseSync(); };
+$('#lyrics-full .lf-close').onclick = () => closeLyricsFull();
 new MutationObserver(() => glisseSync()).observe($('#lyrics-full'), { attributes: true, attributeFilter: ['hidden'] });
 new MutationObserver(() => glisseSync()).observe($('#panel'), { attributes: true, attributeFilter: ['hidden'] });
 document.addEventListener('click', e => {
@@ -2640,7 +2669,7 @@ document.addEventListener('keydown', e => {
   const typing = e.target.closest('input, textarea');
   if (e.key === 'Escape') {
     if (!$('#palette').hidden || !$('#menu').hidden) return closeOverlays();
-    if (!$('#lyrics-full').hidden) return $('#lyrics-full').hidden = true;
+    if (!$('#lyrics-full').hidden) return closeLyricsFull();
     if (typing) return e.target.blur();
   }
   if (typing || !$('#palette').hidden) return;
@@ -2648,7 +2677,7 @@ document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey) return;
   if (e.key === ' ') { e.preventDefault(); return S.track ? ctl('toggle') : resumeSomething(); }
   if (e.key === '/') { e.preventDefault(); return openPalette(); }
-  if (e.key === 'f' || e.key === 'F') return $('#lyrics-full').hidden ? openLyricsFull() : ($('#lyrics-full').hidden = true);
+  if (e.key === 'f' || e.key === 'F') return $('#lyrics-full').hidden ? openLyricsFull() : closeLyricsFull();
   if (e.shiftKey && e.key === 'ArrowRight') return ctl('seek', Math.min(S.dur - 1000, position() + 10000));
   if (e.shiftKey && e.key === 'ArrowLeft') return ctl('seek', Math.max(0, position() - 10000));
   if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && $('#view [data-list]')) {
@@ -2674,7 +2703,7 @@ window.spokoeBack = () => {
   const ask = $('#ask');
   if (ask) { ask.remove(); return true; }
   if (!$('#menu').hidden || !$('#palette').hidden) { closeOverlays(); return true; }
-  if (!$('#lyrics-full').hidden) { $('#lyrics-full').hidden = true; return true; }
+  if (!$('#lyrics-full').hidden) { closeLyricsFull(); return true; }
   if (S.panel) { togglePanel(S.panel); return true; }
   if (hist.length) { back(); return true; }
   if (cur?.where !== 'home') { go('home'); return true; }
