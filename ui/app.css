@@ -912,3 +912,25 @@ html.mobile .lf-close { width: 40px; height: 40px; background: rgba(255,255,255,
 html.mobile:not(.tablet) #lyrics-full::before { content: ""; position: absolute; z-index: 3; top: calc(var(--safe-top) + 14px); left: 50%; transform: translateX(-50%); width: 40px; height: 5px; border-radius: 3px; background: rgba(255,255,255,.35); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; } }
+
+/* ——— albums in de zijbalk ——— */
+#side-lists .side-album span { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+#side-lists .side-album small { font-size: 11px; color: var(--ink-2); font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+#side-lists .side-album img { border-radius: 3px; }
+
+/* ——— hoes groot: klik op de albumhoes ——— */
+.sleeve { cursor: zoom-in; }
+#sleeve-big { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; cursor: zoom-out; overflow: hidden; background: rgba(0,0,0,.55); }
+#sleeve-big[hidden] { display: none; }
+#sleeve-big .sb-bg { position: absolute; inset: -80px; background: center / cover; filter: blur(70px) saturate(1.5); opacity: .6; transform: scale(1.1); }
+#sleeve-big .sb-stage { --s: min(46vw, 72vh, 620px); position: relative; width: calc(var(--s) * 1.5); height: var(--s); }
+#sleeve-big .sb-jacket { position: absolute; z-index: 2; left: 0; top: 0; width: var(--s); height: var(--s); object-fit: cover; border-radius: 6px; box-shadow: 10px 18px 60px rgba(0,0,0,.6); }
+#sleeve-big .sb-disc { top: 2%; left: 2%; width: calc(var(--s) * .96); height: calc(var(--s) * .96); animation: sb-out 1s cubic-bezier(.2,.8,.2,1) .2s both; }
+#sleeve-big.spin .sb-disc { animation: sb-out 1s cubic-bezier(.2,.8,.2,1) .2s both, sb-spin 4s linear 1.2s infinite; }
+#sleeve-big .sb-title { position: absolute; bottom: 28px; left: 0; right: 0; text-align: center; color: #fff; font: 700 15px -apple-system, "Segoe UI", sans-serif; text-shadow: 0 1px 8px rgba(0,0,0,.6); opacity: .85; }
+#sleeve-big.in { animation: sb-fade .3s var(--ease) both; }
+#sleeve-big.in .sb-jacket { animation: cover-in .55s var(--spring) both; }
+@keyframes sb-fade { from { opacity: 0; } }
+@keyframes sb-out { from { transform: translateX(0) rotate(-120deg); } to { transform: translateX(50%) rotate(0deg); } }
+@keyframes sb-spin { from { transform: translateX(50%) rotate(0deg); } to { transform: translateX(50%) rotate(360deg); } }
+html.mobile:not(.tablet) #sleeve-big .sb-stage { --s: 62vw; }

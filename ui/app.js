@@ -719,6 +719,7 @@ let renderId = 0;
 let restoreScroll = 0;
 async function show(entry) {
   const id = ++renderId;
+  if (!$('#sleeve-big').hidden) closeSleeve();
   const view = $('#view');
   view.innerHTML = '';
   view.scrollTop = 0;
@@ -961,6 +962,7 @@ function findTrack(uri) {
 function updateBigPlay(b) {
   const on = S.ctx === b.dataset.ctx && S.playing;
   $('.sleeve')?.classList.toggle('spin', !!$('.sleeve') && S.playing && (S.ctx === $('.sleeve').dataset.ctx || (S.track?.album?.id && $('.sleeve').dataset.ctx.endsWith(S.track.album.id))));
+  if (!$('#sleeve-big').hidden) sleeveSpin();
   b.innerHTML = icon(on ? 'pause' : 'play');
   b.classList.toggle('pausing', on);
 }
@@ -993,6 +995,7 @@ function openContext(e) {
       { label: 'Kopieer link', fn: () => copyLink(uri) },
     ];
     if (kind === 'artist') items.splice(1, 1);
+    if (kind === 'album') items.splice(3, 0, { label: inSide(uri) ? 'Uit de zijbalk halen' : 'In de zijbalk zetten', fn: () => toggleSideAlbum(uri) });
     menu(e.clientX, e.clientY, items);
   }
   return true;
@@ -1362,10 +1365,32 @@ async function myPlaylists(fresh) {
   store.set('playlists', myPlaylists.list.map(p => ({ id: p.id, uri: p.uri, name: p.name, images: (p.images || []).slice(-1), owner: { id: p.owner?.id, display_name: p.owner?.display_name }, collaborative: p.collaborative })));
   return myPlaylists.list;
 }
+/** Albums die je zelf in de zijbalk hebt gezet (lokaal bewaard, nieuwste bovenaan). */
+const sideAlbums = () => store.get('sideAlbums', []);
+const inSide = uri => sideAlbums().some(a => a.uri === uri);
+async function toggleSideAlbum(uri) {
+  const list = sideAlbums();
+  if (list.some(a => a.uri === uri)) {
+    store.set('sideAlbums', list.filter(a => a.uri !== uri));
+    store.set('pins', store.get('pins', []).filter(u => u !== uri));
+    const folders = store.get('folders', []);
+    folders.forEach(f => f.items = f.items.filter(u => u !== uri));
+    store.set('folders', folders);
+    toast('Uit de zijbalk');
+  } else {
+    try {
+      const a = await get(`/albums/${uri.split(':')[2]}`, 3600000);
+      store.set('sideAlbums', [{ id: a.id, uri: a.uri, name: a.name, images: (a.images || []).slice(-1), artist: (a.artists || []).map(x => x.name).join(', '), album: true }, ...list]);
+      toast('In de zijbalk');
+    } catch (e) { return toast(e.message); }
+  }
+  renderSide();
+}
 /** De zijbalk: vastgezet, mappen (van Spotify en van Spokoe), dan de rest in de volgorde van je bibliotheek. */
 function renderSide(list) {
   list = list || myPlaylists.list || store.get('playlists', []);
-  const byUri = new Map(list.map(p => [p.uri, p]));
+  const albums = sideAlbums();
+  const byUri = new Map([...list, ...albums].map(p => [p.uri, p]));
   const order = store.get('rootlist', null);
   // Volgorde en Spotify-mappen uit de rootlist (als die er is).
   const spotifyFolders = [], ordered = [];
@@ -1378,16 +1403,17 @@ function renderSide(list) {
     }
     for (const p of list) if (!order.some(o => o.uri === p.uri)) ordered.unshift(p.uri);
   } else ordered.push(...list.map(p => p.uri));
+  ordered.unshift(...albums.map(a => a.uri));
   const pins = store.get('pins', []).filter(u => byUri.has(u));
   const folders = [...spotifyFolders, ...store.get('folders', [])];
   const inFolder = new Set(folders.flatMap(f => f.items));
   const open = store.get('openFolders', {});
-  const btn = p => `<button data-go="playlist:${esc(p.id)}" data-card="${esc(p.uri)}" data-side="${esc(p.uri)}" title="${esc(p.name)}">${img(p.images, 64, '', p.name)}<span>${esc(p.name)}</span>${pins.includes(p.uri) ? '<i class="pin">•</i>' : ''}</button>`;
+  const btn = p => `<button data-go="${p.album ? 'album' : 'playlist'}:${esc(p.id)}" data-card="${esc(p.uri)}" data-side="${esc(p.uri)}"${p.album ? ' class="side-album"' : ''} title="${esc(p.album ? `${p.name} · ${p.artist}` : p.name)}">${img(p.images, 64, '', p.name)}<span>${esc(p.name)}${p.album ? `<small>Album · ${esc(p.artist)}</small>` : ''}</span>${pins.includes(p.uri) ? '<i class="pin">•</i>' : ''}</button>`;
   $('#side-lists').innerHTML =
     `<button data-go="liked:" data-card="spotify:user:${esc(S.user)}:collection"><div class="ph liked-ph">${icon('heart-on')}</div><span>Nummers die je leuk vindt</span></button>` +
     pins.map(u => btn(byUri.get(u))).join('') +
     folders.map(f => `<div class="folder${open[f.id] ? ' open' : ''}" data-folder="${esc(f.id)}"><button class="folder-head" data-fold="${esc(f.id)}"><div class="ph folder-ph">${icon('folder')}</div><span>${esc(f.name)}</span><i class="chev">${icon('right')}</i></button>
-      <div class="folder-items">${f.items.filter(u => byUri.has(u) && !pins.includes(u)).map(u => btn(byUri.get(u))).join('') || '<div class="folder-empty">Sleep playlists hierheen</div>'}</div></div>`).join('') +
+      <div class="folder-items">${f.items.filter(u => byUri.has(u) && !pins.includes(u)).map(u => btn(byUri.get(u))).join('') || '<div class="folder-empty">Sleep playlists of albums hierheen</div>'}</div></div>`).join('') +
     ordered.filter(u => !pins.includes(u) && !inFolder.has(u)).map(u => btn(byUri.get(u))).join('');
   markNow();
 }
@@ -1409,21 +1435,30 @@ async function refreshRootlist() {
 
 /** Rechtsklik op een playlist in de zijbalk. */
 function sideMenu(x, y, uri) {
-  const p = (myPlaylists.list || []).find(q => q.uri === uri);
-  if (!p) return;
-  const own = p.owner?.id === S.me?.id;
   const pins = store.get('pins', []);
   const folders = store.get('folders', []);
   const inF = folders.find(f => f.items.includes(uri));
+  const place = [
+    { label: pins.includes(uri) ? 'Losmaken' : 'Vastzetten bovenaan', fn: () => { store.set('pins', pins.includes(uri) ? pins.filter(u => u !== uri) : [uri, ...pins]); renderSide(); } },
+    { label: 'Naar map…', fn: () => folderMenu(x, y, uri) },
+    ...(inF ? [{ label: `Uit map “${inF.name}”`, fn: () => { inF.items = inF.items.filter(u => u !== uri); store.set('folders', folders); renderSide(); } }] : []),
+  ];
+  if (inSide(uri)) return menu(x, y, [
+    { label: 'Afspelen', fn: () => playUri(uri) },
+    { label: 'Slim shuffelen', fn: () => smartShuffle(uri) },
+    { label: 'In de wachtrij', fn: () => queueContext(uri) },
+    '-', ...place, '-',
+    { label: 'Kopieer link', fn: () => copyLink(uri) },
+    { label: 'Uit de zijbalk halen', fn: () => toggleSideAlbum(uri) },
+  ]);
+  const p = (myPlaylists.list || []).find(q => q.uri === uri);
+  if (!p) return;
+  const own = p.owner?.id === S.me?.id;
   menu(x, y, [
     { label: 'Afspelen', fn: () => playUri(uri) },
     { label: 'Slim shuffelen', fn: () => smartShuffle(uri) },
     { label: 'In de wachtrij', fn: () => queueContext(uri) },
-    '-',
-    { label: pins.includes(uri) ? 'Losmaken' : 'Vastzetten bovenaan', fn: () => { store.set('pins', pins.includes(uri) ? pins.filter(u => u !== uri) : [uri, ...pins]); renderSide(); } },
-    { label: 'Naar map…', fn: () => folderMenu(x, y, uri) },
-    ...(inF ? [{ label: `Uit map “${inF.name}”`, fn: () => { inF.items = inF.items.filter(u => u !== uri); store.set('folders', folders); renderSide(); } }] : []),
-    '-',
+    '-', ...place, '-',
     ...(own ? [{ label: 'Bewerken…', fn: () => editPlaylist(p) }] : []),
     { label: 'Duplicaten opruimen', fn: () => dedupePlaylist(p) },
     { label: 'Samenvoegen met…', fn: () => mergeMenu(x, y, p) },
@@ -1812,7 +1847,7 @@ const views = {
       kind: a.album_type === 'single' ? 'Single' : a.album_type === 'compilation' ? 'Compilatie' : 'Album', title: a.name, images: a.images, uri: a.uri,
       meta: `${a.artists.map(x => `<a data-go="artist:${esc(x.id)}"><b>${esc(x.name)}</b></a>`).join(', ')} · ${(a.release_date || '').slice(0, 4)}`,
       album: false, numbers: true, cover: false, save: a.uri, sleeve: true,
-      more: anchor => menuAt(anchor, [{ label: 'In de wachtrij', fn: () => queueContext(a.uri) }, { label: 'Kopieer link', fn: () => copyLink(a.uri) }]),
+      more: anchor => menuAt(anchor, [{ label: 'In de wachtrij', fn: () => queueContext(a.uri) }, { label: inSide(a.uri) ? 'Uit de zijbalk halen' : 'In de zijbalk zetten', fn: () => toggleSideAlbum(a.uri) }, { label: 'Kopieer link', fn: () => copyLink(a.uri) }]),
     }, alive);
     let items = a.tracks.items, next = a.tracks.next;
     const set = () => L.set(items.map(t => ({ ...norm(t, albumInfo), number: t.track_number })));
@@ -2055,6 +2090,7 @@ async function collection(el, o, alive) {
     ${o.more ? `<button class="icon" id="c-more" title="Meer">${icon('more')}</button>` : ''}
     <input class="filter" id="c-filter" placeholder="Zoek in de lijst…"></div><div id="c-list">${Array.from({ length: 8 }, () => '<div class="skel-row"><i class="skel"></i><div><b class="skel"></b><b class="skel short"></b></div></div>').join('')}</div>`;
   tint(el, o.images);
+  $('.sleeve', el)?.addEventListener('click', () => openSleeve(o));
   // Volgen (playlist van een ander) of bewaren (album): via je bibliotheek.
   for (const [id, uri, on, off] of [['#c-follow', o.follow, 'Gevolgd', 'Volgen'], ['#c-save', o.save, 'Bewaard', 'Bewaren']]) {
     const b = $(id, el);
@@ -2087,6 +2123,23 @@ async function collection(el, o, alive) {
   };
   return coll;
 }
+
+/** Klik op een albumhoes: de hoes en de plaat groot naast elkaar. */
+function openSleeve(o) {
+  const big = pic(o.images, 640);
+  const box = $('#sleeve-big');
+  box.innerHTML = `<div class="sb-bg" style="background-image:url('${esc(big)}')"></div>
+    <div class="sb-stage"><img class="sb-jacket" src="${esc(big)}" alt="">
+    <div class="disc sb-disc" style="--cover:url('${esc(big)}')"><i></i></div></div>
+    <div class="sb-title">${esc(o.title)}</div>`;
+  box.hidden = false;
+  box.classList.remove('in'); void box.offsetWidth; box.classList.add('in');
+  sleeveSpin();
+}
+function closeSleeve() { $('#sleeve-big').hidden = true; $('#sleeve-big').innerHTML = ''; }
+/** Draait als dit album speelt, net als de kleine plaat op de albumpagina. */
+function sleeveSpin() { $('#sleeve-big').classList.toggle('spin', !!$('.sleeve.spin')); }
+$('#sleeve-big').addEventListener('click', closeSleeve);
 
 /** Een zachte kleur uit de hoes achter de kop. */
 function tint(el, images) {
@@ -2669,6 +2722,7 @@ document.addEventListener('keydown', e => {
   const typing = e.target.closest('input, textarea');
   if (e.key === 'Escape') {
     if (!$('#palette').hidden || !$('#menu').hidden) return closeOverlays();
+    if (!$('#sleeve-big').hidden) return closeSleeve();
     if (!$('#lyrics-full').hidden) return closeLyricsFull();
     if (typing) return e.target.blur();
   }
